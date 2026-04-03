@@ -5,7 +5,7 @@ import { ThemedText } from '@/components/themed-text'; // Importing a custom the
 import { ThemedView } from '@/components/themed-view'; // Importing a custom themed view component
 import { Link } from 'expo-router'; //navigates to other screens in the app (expo-router is a routing library for React Native)
 import React from 'react'; // Importing React to create components
-import { ImageBackground, StyleSheet, } from 'react-native'; // Importing view, text, and StyleSheet to create styles for the components
+import { Button, ImageBackground, StyleSheet, View } from 'react-native'; // Importing view, text, and StyleSheet to create styles for the components
 
 // The styles for the home screen, defining layout and appearance of 
 // the container and link.
@@ -43,6 +43,11 @@ export default function HomeScreen() {
     <ThemedView style={styles.container}> 
         <ThemedText type="title">Welcome to Sprout About!</ThemedText>
         <ThemedText type="subtitle">Watch your dreams take root!</ThemedText>
+        <View style={{ padding: 20, borderWidth: 1, borderColor: 'black' }}>
+          <Button title="Log in" onPress={() => {}} /> {/* Placeholder for future functionality */}
+        </View>
+        
+        <Button title="Sign up" onPress={() => {}} /> {/* Placeholder for future functionality */}
         <Link href="/modal" style={styles.link}>
             <ThemedText type="link" style={styles.link}>  {/*in line style override it works but fix this!*/}
               Let's get growing! 
