@@ -1,77 +1,83 @@
-import { useAuth } from '@/context/auth';
 import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
-import { addGardenBed, deleteGardenBed, GardenBed, getGardenBeds } from '@/lib/database';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { addPlant, deletePlant, GardenBed, getGardenBed, getPlants, Plant } from '@/lib/database';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, FlatList, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
-export default function HomeScreen() {
-  const { userId, logout } = useAuth();
+export default function BedDetailScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const bedId = Number(id);
   const router = useRouter();
-  const [beds, setBeds] = useState<GardenBed[]>([]);
+  const navigation = useNavigation();
+
+  const [bed, setBed] = useState<GardenBed | null>(null);
+  const [plants, setPlants] = useState<Plant[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
-  const [newBedName, setNewBedName] = useState('');
+  const [newPlantName, setNewPlantName] = useState('');
+
+  useEffect(() => {
+    const found = getGardenBed(bedId);
+    setBed(found);
+    if (found) navigation.setOptions({ title: found.name });
+  }, [bedId]);
 
   useFocusEffect(
     useCallback(() => {
-      if (userId) setBeds(getGardenBeds(userId));
-    }, [userId])
+      setPlants(getPlants(bedId));
+    }, [bedId])
   );
 
-  function handleAddBed() {
-    if (!newBedName.trim() || !userId) return;
-    addGardenBed(userId, newBedName.trim());
-    setBeds(getGardenBeds(userId));
-    setNewBedName('');
+  function handleAddPlant() {
+    if (!newPlantName.trim()) return;
+    addPlant(bedId, newPlantName.trim());
+    setPlants(getPlants(bedId));
+    setNewPlantName('');
     setModalVisible(false);
   }
 
-  function handleDeleteBed(id: number) {
-    Alert.alert('Delete Bed', 'This will also remove all plants inside it. Continue?', [
+  function handleDeletePlant(plantId: number) {
+    Alert.alert('Remove Plant', 'Remove this plant and all its data?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Delete',
+        text: 'Remove',
         style: 'destructive',
         onPress: () => {
-          deleteGardenBed(id);
-          if (userId) setBeds(getGardenBeds(userId));
+          deletePlant(plantId);
+          setPlants(getPlants(bedId));
         },
       },
     ]);
   }
 
-  async function handleLogout() {
-    await logout();
-    router.replace('/');
-  }
-
   return (
     <GardenBackground style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">My Garden</ThemedText>
-        <Pressable onPress={handleLogout} style={styles.logoutBtn}>
-          <ThemedText style={styles.logoutText}>Log Out</ThemedText>
-        </Pressable>
-      </View>
-
       <FlatList
-        data={beds}
+        data={plants}
         keyExtractor={(item) => String(item.id)}
         contentContainerStyle={styles.list}
+        ListHeaderComponent={
+          plants.length > 0 ? (
+            <ThemedText style={styles.hint}>Tap a plant to view details. Hold to remove.</ThemedText>
+          ) : null
+        }
         ListEmptyComponent={
           <ThemedText style={styles.empty}>
-            No garden beds yet.{'\n'}Tap + to add your first one.
+            No plants yet.{'\n'}Tap + to add your first plant.
           </ThemedText>
         }
         renderItem={({ item }) => (
           <Pressable
-            style={styles.bedCard}
-            onPress={() => router.push({ pathname: '/bed/[id]', params: { id: item.id } })}
-            onLongPress={() => handleDeleteBed(item.id)}
+            style={styles.plantCard}
+            onPress={() => router.push({ pathname: '/plant/[id]', params: { id: item.id } })}
+            onLongPress={() => handleDeletePlant(item.id)}
           >
-            <ThemedText style={styles.bedName}>{item.name}</ThemedText>
-            <ThemedText style={styles.bedHint}>Hold to delete</ThemedText>
+            <ThemedText style={styles.plantName}>{item.name}</ThemedText>
+            {item.planted_date ? (
+              <ThemedText style={styles.plantSub}>Planted: {item.planted_date}</ThemedText>
+            ) : (
+              <ThemedText style={styles.plantSub}>Tap to add details</ThemedText>
+            )}
           </Pressable>
         )}
       />
@@ -83,23 +89,23 @@ export default function HomeScreen() {
       <Modal visible={modalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <ThemedText type="subtitle" style={styles.modalTitle}>New Garden Bed</ThemedText>
+            <ThemedText type="subtitle" style={styles.modalTitle}>Add Plant</ThemedText>
             <TextInput
               style={styles.input}
-              placeholder="e.g., Raised Bed 1, Front Yard"
+              placeholder="e.g., Tomatoes, Basil, Zucchini"
               placeholderTextColor="#888"
-              value={newBedName}
-              onChangeText={setNewBedName}
+              value={newPlantName}
+              onChangeText={setNewPlantName}
               autoFocus
             />
             <View style={styles.modalBtns}>
               <Pressable
                 style={styles.btnCancel}
-                onPress={() => { setModalVisible(false); setNewBedName(''); }}
+                onPress={() => { setModalVisible(false); setNewPlantName(''); }}
               >
                 <ThemedText style={styles.btnCancelText}>Cancel</ThemedText>
               </Pressable>
-              <Pressable style={styles.btnAdd} onPress={handleAddBed}>
+              <Pressable style={styles.btnAdd} onPress={handleAddPlant}>
                 <ThemedText style={styles.btnAddText}>Add</ThemedText>
               </Pressable>
             </View>
@@ -111,17 +117,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 60 },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  logoutBtn: { padding: 8 },
-  logoutText: { color: '#3a7d44', fontSize: 15 },
-  list: { paddingHorizontal: 20, paddingBottom: 100 },
+  container: { flex: 1 },
+  list: { padding: 20, paddingBottom: 100 },
+  hint: { color: '#888', fontSize: 13, marginBottom: 12 },
   empty: {
     textAlign: 'center',
     color: '#888',
@@ -129,7 +127,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     fontSize: 16,
   },
-  bedCard: {
+  plantCard: {
     backgroundColor: '#f0f7f0',
     borderRadius: 14,
     padding: 18,
@@ -137,8 +135,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#c8e6c9',
   },
-  bedName: { fontSize: 18, fontWeight: '600', color: '#2e5c35' },
-  bedHint: { fontSize: 12, color: '#888', marginTop: 4 },
+  plantName: { fontSize: 17, fontWeight: '600', color: '#2e5c35' },
+  plantSub: { fontSize: 13, color: '#666', marginTop: 4 },
   fab: {
     position: 'absolute',
     bottom: 32,
