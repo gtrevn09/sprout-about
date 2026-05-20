@@ -1,5 +1,6 @@
+import { useAuth } from '@/context/auth';
+import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
@@ -7,6 +8,7 @@ import { loginUser } from '../lib/database';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -21,7 +23,8 @@ export default function LoginScreen() {
     setLoading(true);
     const result = await loginUser(username.trim(), password);
     setLoading(false);
-    if (result.success) {
+    if (result.success && result.userId) {
+      await login(result.userId);
       router.replace('/(tabs)/home');
     } else {
       setError(result.error ?? 'Login failed.');
@@ -29,12 +32,12 @@ export default function LoginScreen() {
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <GardenBackground variant="auth" style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.inner}
       >
-        <ThemedText type="title" style={styles.heading}>Welcome back</ThemedText>
+        <ThemedText type="title" style={[styles.heading, styles.headingGreen]}>Welcome back</ThemedText>
         <ThemedText style={styles.sub}>Log in to your Sprout About account.</ThemedText>
 
         <TextInput
@@ -66,27 +69,21 @@ export default function LoginScreen() {
           <ThemedText style={styles.link}>Don't have an account? Sign up</ThemedText>
         </Pressable>
       </KeyboardAvoidingView>
-    </ThemedView>
+    </GardenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   inner: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 28,
     paddingBottom: 40,
   },
-  heading: {
-    marginBottom: 6,
-  },
-  sub: {
-    color: '#666',
-    marginBottom: 32,
-  },
+  heading: { marginBottom: 6 },
+  headingGreen: { color: '#3a7d44' },
+  sub: { color: '#666', marginBottom: 32 },
   input: {
     borderWidth: 1,
     borderColor: '#ccc',
@@ -98,11 +95,7 @@ const styles = StyleSheet.create({
     color: '#11181C',
     backgroundColor: '#f9f9f9',
   },
-  error: {
-    color: '#c0392b',
-    marginBottom: 12,
-    fontSize: 14,
-  },
+  error: { color: '#c0392b', marginBottom: 12, fontSize: 14 },
   btnPrimary: {
     backgroundColor: '#3a7d44',
     paddingVertical: 16,
@@ -110,17 +103,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
-  btnPrimaryText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  linkRow: {
-    marginTop: 24,
-    alignItems: 'center',
-  },
-  link: {
-    color: '#3a7d44',
-    fontSize: 15,
-  },
+  btnPrimaryText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  linkRow: { marginTop: 24, alignItems: 'center' },
+  link: { color: '#3a7d44', fontSize: 15 },
 });

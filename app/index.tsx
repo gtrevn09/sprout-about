@@ -1,3 +1,4 @@
+import { useAuth } from '@/context/auth';
 import { ThemedText } from '@/components/themed-text';
 import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
@@ -6,10 +7,17 @@ import { initDatabase } from '../lib/database';
 
 export default function LandingScreen() {
   const router = useRouter();
+  const { userId, isLoading } = useAuth();
 
   useEffect(() => {
     initDatabase();
   }, []);
+
+  useEffect(() => {
+    if (!isLoading && userId) {
+      router.replace('/(tabs)/home');
+    }
+  }, [isLoading, userId]);
 
   return (
     <ImageBackground
@@ -22,6 +30,9 @@ export default function LandingScreen() {
           <ThemedText type="title" style={styles.title}>Sprout About</ThemedText>
           <ThemedText type="subtitle" style={styles.tagline}>
             Track and nurture your garden's growth.
+          </ThemedText>
+          <ThemedText style={styles.about}>
+            Organize your garden beds, log each plant's progress with photos, and never miss a fertilizing schedule — all stored privately on your device.
           </ThemedText>
 
           <View style={styles.buttons}>
@@ -39,12 +50,10 @@ export default function LandingScreen() {
 }
 
 const styles = StyleSheet.create({
-  background: {
-    flex: 1,
-  },
+  background: { flex: 1 },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.50)',
     justifyContent: 'flex-end',
     paddingBottom: 80,
   },
@@ -60,8 +69,15 @@ const styles = StyleSheet.create({
   tagline: {
     color: '#d4edda',
     textAlign: 'center',
-    marginBottom: 48,
+    marginBottom: 14,
     fontWeight: '400',
+  },
+  about: {
+    color: 'rgba(255,255,255,0.80)',
+    textAlign: 'center',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 40,
   },
   buttons: {
     width: '100%',
