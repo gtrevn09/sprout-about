@@ -26,7 +26,15 @@ export function DateTimePickerInput({ value, onChange, mode, placeholder }: Prop
     : placeholder ?? (mode === 'date' ? 'Select date…' : 'Select time…');
 
   function handleOpen() {
-    setTempDate(value ?? new Date());
+    if (value) {
+      setTempDate(value);
+    } else {
+      // Default to yesterday so tapping today always fires a change event
+      // (onChange won't fire if the picker's current value already equals the tapped date)
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      setTempDate(yesterday);
+    }
     setShow(true);
   }
 

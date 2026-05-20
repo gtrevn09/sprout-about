@@ -48,9 +48,14 @@ export function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       plant_id INTEGER NOT NULL UNIQUE,
       scheduled_for TEXT NOT NULL,
-      notification_id TEXT
+      notification_id TEXT,
+      repeat_days INTEGER,
+      notification_time TEXT
     );
   `);
+  // Migrate existing installs that predate the repeat columns
+  try { db.execSync('ALTER TABLE plant_schedules ADD COLUMN repeat_days INTEGER;'); } catch {}
+  try { db.execSync('ALTER TABLE plant_schedules ADD COLUMN notification_time TEXT;'); } catch {}
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -258,16 +263,26 @@ export type PlantSchedule = {
   plant_id: number;
   scheduled_for: string;
   notification_id: string | null;
+  repeat_days: number | null;
+  notification_time: string | null;
 };
 
 export function getPlantSchedule(plantId: number): PlantSchedule | null {
   return db.getFirstSync<PlantSchedule>('SELECT * FROM plant_schedules WHERE plant_id = ?;', plantId) ?? null;
 }
 
-export function upsertPlantSchedule(plantId: number, scheduledFor: string, notificationId: string | null): void {
+export function upsertPlantSchedule(
+  plantId: number,
+  scheduledFor: string,
+  notificationId: string | null,
+  repeatDays: number | null,
+  notificationTime: string | null
+): void {
   db.runSync(
-    'INSERT OR REPLACE INTO plant_schedules (plant_id, scheduled_for, notification_id) VALUES (?, ?, ?);',
-    plantId, scheduledFor, notificationId
+    `INSERT OR REPLACE INTO plant_schedules
+       (plant_id, scheduled_for, notification_id, repeat_days, notification_time)
+     VALUES (?, ?, ?, ?, ?);`,
+    plantId, scheduledFor, notificationId, repeatDays, notificationTime
   );
 }
 

@@ -54,7 +54,15 @@
           "color": "#3a7d44"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Sprout About to save plant photos to your library.",
+          "savePhotosPermission": "Allow Sprout About to save plant photos to your library.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
