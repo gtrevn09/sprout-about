@@ -49,7 +49,7 @@ export default function HomeScreen() {
   return (
     <GardenBackground style={styles.container}>
       <View style={styles.header}>
-        <ThemedText type="title">My Garden</ThemedText>
+        <ThemedText type="title" style={{ color: '#3a7d44' }}>My Garden</ThemedText>
         <Pressable onPress={handleLogout} style={styles.logoutBtn}>
           <ThemedText style={styles.logoutText}>Log Out</ThemedText>
         </Pressable>

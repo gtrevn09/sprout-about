@@ -25,20 +25,24 @@ import {
 } from '@/lib/database';
 import { scheduleFertilizerReminder } from '@/lib/notifications';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Dimensions,
+  FlatList,
   Image,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 function todayStart() {
   const d = new Date();
@@ -119,7 +123,11 @@ export default function PlantDetailScreen() {
   const [noteContent, setNoteContent] = useState('');
 
   // Full-screen photo viewer
-  const [viewPhotoUri, setViewPhotoUri] = useState<string | null>(null);
+  const [viewPhotoIndex, setViewPhotoIndex] = useState<number | null>(null);
+
+  // Export selection mode
+  const [exportMode, setExportMode] = useState(false);
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<number>>(new Set());
 
   useEffect(() => { loadData(); }, [plantId]);
 
@@ -176,6 +184,46 @@ export default function PlantDetailScreen() {
     }
   }
 
+  function toggleExportMode() {
+    setExportMode(v => !v);
+    setSelectedPhotoIds(new Set());
+  }
+
+  function togglePhotoSelected(id: number) {
+    setSelectedPhotoIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllPhotos() {
+    setSelectedPhotoIds(new Set(photos.map(p => p.id)));
+  }
+
+  async function handleExportSelected() {
+    if (selectedPhotoIds.size === 0) {
+      Alert.alert('Nothing selected', 'Tap photos to select them first.');
+      return;
+    }
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Enable photo library access in Settings to export photos.');
+      return;
+    }
+    const toExport = photos.filter(p => selectedPhotoIds.has(p.id));
+    let saved = 0;
+    for (const p of toExport) {
+      try {
+        await MediaLibrary.saveToLibraryAsync(p.photo_uri);
+        saved++;
+      } catch {}
+    }
+    setExportMode(false);
+    setSelectedPhotoIds(new Set());
+    Alert.alert('Export complete', `${saved} photo${saved === 1 ? '' : 's'} saved to your library.`);
+  }
+
   function showPhotoOptions() {
     Alert.alert('Add Photo', 'Choose a source', [
       { text: 'Camera', onPress: () => handleAddPhoto('camera') },
@@ -211,6 +259,15 @@ export default function PlantDetailScreen() {
     setFertLogs(getFertilizerLogs(plantId));
     setFertType(''); setFertDate(null); setFertNotes('');
     setFertModalVisible(false);
+
+    // Clear or reschedule so the overdue banner goes away
+    const sched = getPlantSchedule(plantId);
+    if (sched?.repeat_days) {
+      autoReschedule(sched.repeat_days, sched.notification_time ?? '09:00');
+    } else {
+      clearPlantSchedule(plantId);
+      setNextScheduledDate(null);
+    }
   }
 
   function handleDeleteFertLog(logId: number) {
@@ -425,18 +482,59 @@ export default function PlantDetailScreen() {
           {photos.length === 0 ? (
             <ThemedText style={styles.emptySmall}>No photos yet. Add one to track growth.</ThemedText>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoRow}>
-              {photos.map((p) => (
-                <Pressable key={p.id} onPress={() => setViewPhotoUri(p.photo_uri)} onLongPress={() => handleDeletePhoto(p.id)} style={styles.photoThumb}>
-                  <Image source={{ uri: p.photo_uri }} style={styles.photoImg} />
-                  <Text style={styles.photoDate}>{p.taken_at.slice(0, 10)}</Text>
+            <>
+              {exportMode && (
+                <Pressable style={styles.selectAllBtn} onPress={selectAllPhotos}>
+                  <Text style={styles.selectAllText}>Select All ({photos.length})</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoRow}>
+                {photos.map((p) => {
+                  const selected = selectedPhotoIds.has(p.id);
+                  return (
+                    <Pressable
+                      key={p.id}
+                      style={styles.photoThumb}
+                      onPress={exportMode ? () => togglePhotoSelected(p.id) : () => setViewPhotoIndex(photos.indexOf(p))}
+                      onLongPress={exportMode ? undefined : () => handleDeletePhoto(p.id)}
+                    >
+                      <Image source={{ uri: p.photo_uri }} style={[styles.photoImg, selected && styles.photoImgSelected]} />
+                      {exportMode && (
+                        <View style={[styles.photoCheckCircle, selected && styles.photoCheckCircleOn]}>
+                          {selected && <Text style={styles.photoCheckMark}>✓</Text>}
+                        </View>
+                      )}
+                      <Text style={styles.photoDate}>{p.taken_at.slice(0, 10)}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </>
           )}
-          <Pressable style={styles.btnOutline} onPress={showPhotoOptions}>
-            <Text style={styles.btnOutlineText}>+ Add Photo</Text>
-          </Pressable>
+
+          {exportMode ? (
+            <View style={styles.exportActionRow}>
+              <Pressable style={styles.btnCancel} onPress={toggleExportMode}>
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[styles.btnAdd, selectedPhotoIds.size === 0 && styles.btnDisabled]} onPress={handleExportSelected}>
+                <Text style={styles.btnAddText}>
+                  Export{selectedPhotoIds.size > 0 ? ` (${selectedPhotoIds.size})` : ''}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <Pressable style={styles.btnOutline} onPress={showPhotoOptions}>
+                <Text style={styles.btnOutlineText}>+ Add Photo</Text>
+              </Pressable>
+              {photos.length > 0 && (
+                <Pressable style={[styles.btnOutline, { borderColor: '#555', marginTop: 8 }]} onPress={toggleExportMode}>
+                  <Text style={[styles.btnOutlineText, { color: '#555' }]}>Export Photos</Text>
+                </Pressable>
+              )}
+            </>
+          )}
         </View>
 
         {/* Fertilizer Log */}
@@ -487,11 +585,42 @@ export default function PlantDetailScreen() {
 
       </ScrollView>
 
-      {/* Full-screen photo */}
-      <Modal visible={!!viewPhotoUri} transparent animationType="fade">
-        <Pressable style={styles.photoModalBg} onPress={() => setViewPhotoUri(null)}>
-          {viewPhotoUri && <Image source={{ uri: viewPhotoUri }} style={styles.photoFull} resizeMode="contain" />}
-        </Pressable>
+      {/* Full-screen swipeable photo viewer */}
+      <Modal visible={viewPhotoIndex !== null} transparent animationType="fade">
+        <View style={styles.photoModalBg}>
+          <Pressable style={styles.photoModalClose} onPress={() => setViewPhotoIndex(null)}>
+            <Text style={styles.photoModalCloseText}>✕</Text>
+          </Pressable>
+          {viewPhotoIndex !== null && (
+            <>
+              <Text style={styles.photoModalCounter}>
+                {viewPhotoIndex + 1} / {photos.length}
+              </Text>
+              <FlatList
+                data={photos}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                initialScrollIndex={viewPhotoIndex}
+                getItemLayout={(_, index) => ({
+                  length: SCREEN_WIDTH,
+                  offset: SCREEN_WIDTH * index,
+                  index,
+                })}
+                onMomentumScrollEnd={(e) => {
+                  setViewPhotoIndex(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
+                }}
+                keyExtractor={(item) => String(item.id)}
+                renderItem={({ item }) => (
+                  <View style={styles.photoSlide}>
+                    <Image source={{ uri: item.photo_uri }} style={styles.photoFull} resizeMode="contain" />
+                    <Text style={styles.photoSlideDate}>{item.taken_at.slice(0, 10)}</Text>
+                  </View>
+                )}
+              />
+            </>
+          )}
+        </View>
       </Modal>
 
       {/* Confirm fertilization */}
@@ -614,56 +743,53 @@ export default function PlantDetailScreen() {
       {/* Schedule Reminder */}
       <Modal visible={alertModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <View style={styles.modal}>
-              <Text style={styles.modalTitle}>Schedule Fertilizer Reminder</Text>
-              <Text style={styles.fieldLabelDark}>Date</Text>
-              <DateTimePickerInput value={alertDate} onChange={setAlertDate} mode="date" placeholder="Select date…" />
-              <Text style={styles.fieldLabelDark}>Time</Text>
-              <DateTimePickerInput value={alertTime} onChange={setAlertTime} mode="time" />
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Schedule Fertilizer Reminder</Text>
+            <Text style={styles.fieldLabelDark}>Date</Text>
+            <DateTimePickerInput value={alertDate} onChange={setAlertDate} mode="date" placeholder="Select date…" />
+            <Text style={styles.fieldLabelDark}>Time</Text>
+            <DateTimePickerInput value={alertTime} onChange={setAlertTime} mode="time" />
 
-              {/* Repeat */}
-              <View style={styles.repeatRow}>
-                <Text style={styles.repeatLabel}>Repeat reminder</Text>
-                <Switch
-                  value={repeatEnabled}
-                  onValueChange={setRepeatEnabled}
-                  trackColor={{ false: '#ddd', true: '#3a7d44' }}
-                  thumbColor="#fff"
+            {/* Repeat */}
+            <Pressable
+              style={[styles.repeatToggle, repeatEnabled && styles.repeatToggleOn]}
+              onPress={() => setRepeatEnabled(v => !v)}
+            >
+              <Text style={[styles.repeatToggleText, repeatEnabled && styles.repeatToggleTextOn]}>
+                {repeatEnabled ? '✓  Repeat Reminder: ON' : 'Repeat Reminder: OFF'}
+              </Text>
+            </Pressable>
+            {repeatEnabled && (
+              <View style={styles.repeatDaysRow}>
+                <Text style={styles.fieldLabelDark}>Repeat every</Text>
+                <TextInput
+                  style={styles.repeatDaysInput}
+                  value={repeatDaysInput}
+                  onChangeText={setRepeatDaysInput}
+                  keyboardType="number-pad"
+                  placeholder="14"
+                  placeholderTextColor="#aaa"
+                  maxLength={3}
                 />
+                <Text style={styles.repeatDaysUnit}>days</Text>
               </View>
-              {repeatEnabled && (
-                <View style={styles.repeatDaysRow}>
-                  <Text style={styles.fieldLabelDark}>Repeat every</Text>
-                  <TextInput
-                    style={styles.repeatDaysInput}
-                    value={repeatDaysInput}
-                    onChangeText={setRepeatDaysInput}
-                    keyboardType="number-pad"
-                    placeholder="e.g., 14"
-                    placeholderTextColor="#aaa"
-                    maxLength={3}
-                  />
-                  <Text style={styles.repeatDaysUnit}>days</Text>
-                </View>
-              )}
+            )}
 
-              <View style={styles.modalBtns}>
-                <Pressable style={styles.btnCancel} onPress={() => {
-                  setAlertModalVisible(false);
-                  setAlertDate(null);
-                  setAlertTime(defaultReminderTime());
-                  setRepeatEnabled(false);
-                  setRepeatDaysInput('');
-                }}>
-                  <Text style={styles.btnCancelText}>Cancel</Text>
-                </Pressable>
-                <Pressable style={styles.btnAdd} onPress={handleScheduleAlert}>
-                  <Text style={styles.btnAddText}>Set Reminder</Text>
-                </Pressable>
-              </View>
+            <View style={styles.modalBtns}>
+              <Pressable style={styles.btnCancel} onPress={() => {
+                setAlertModalVisible(false);
+                setAlertDate(null);
+                setAlertTime(defaultReminderTime());
+                setRepeatEnabled(false);
+                setRepeatDaysInput('');
+              }}>
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.btnAdd} onPress={handleScheduleAlert}>
+                <Text style={styles.btnAddText}>Set Reminder</Text>
+              </Pressable>
             </View>
-          </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -731,7 +857,25 @@ const styles = StyleSheet.create({
   photoRow: { marginBottom: 4 },
   photoThumb: { marginRight: 10, alignItems: 'center' },
   photoImg: { width: 90, height: 90, borderRadius: 10, backgroundColor: '#ddd' },
+  photoImgSelected: { opacity: 0.7, borderWidth: 3, borderColor: '#3a7d44' },
   photoDate: { fontSize: 11, color: '#888', marginTop: 3 },
+  photoCheckCircle: {
+    position: 'absolute', top: 4, right: 4,
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 2, borderColor: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  photoCheckCircleOn: { backgroundColor: '#3a7d44', borderColor: '#3a7d44' },
+  photoCheckMark: { color: '#fff', fontSize: 13, fontWeight: '700', lineHeight: 16 },
+  selectAllBtn: {
+    alignSelf: 'flex-start', marginBottom: 8,
+    paddingVertical: 5, paddingHorizontal: 12,
+    borderRadius: 8, backgroundColor: '#eaf4eb',
+    borderWidth: 1, borderColor: '#3a7d44',
+  },
+  selectAllText: { fontSize: 13, color: '#3a7d44', fontWeight: '600' },
+  exportActionRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
   fertRow: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'flex-start', paddingVertical: 10,
@@ -750,12 +894,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f7f0', borderRadius: 8, borderWidth: 1, borderColor: '#c8e6c9',
   },
   scheduleText: { fontSize: 14, color: '#3a7d44', fontWeight: '600' },
-  repeatRow: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginTop: 16,
-    paddingVertical: 4,
+  repeatToggle: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#ccc',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
   },
-  repeatLabel: { fontSize: 15, color: '#11181C', fontWeight: '500' },
+  repeatToggleOn: {
+    borderColor: '#3a7d44',
+    backgroundColor: '#eaf4eb',
+  },
+  repeatToggleText: { fontSize: 15, fontWeight: '600', color: '#888' },
+  repeatToggleTextOn: { color: '#3a7d44' },
   repeatDaysRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8,
   },
@@ -767,10 +921,31 @@ const styles = StyleSheet.create({
   },
   repeatDaysUnit: { fontSize: 15, color: '#555' },
   photoModalBg: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
-    justifyContent: 'center', alignItems: 'center',
+    flex: 1,
+    backgroundColor: '#000',
   },
-  photoFull: { width: '100%', height: '80%' },
+  photoModalClose: {
+    position: 'absolute', top: 52, right: 20, zIndex: 10,
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  photoModalCloseText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  photoModalCounter: {
+    position: 'absolute', top: 58, alignSelf: 'center', zIndex: 10,
+    color: '#fff', fontSize: 15, fontWeight: '600',
+  },
+  photoSlide: {
+    width: SCREEN_WIDTH,
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoFull: { width: SCREEN_WIDTH, height: '80%' },
+  photoSlideDate: {
+    color: 'rgba(255,255,255,0.6)', fontSize: 13,
+    marginTop: 12, textAlign: 'center',
+  },
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center', paddingHorizontal: 28,
