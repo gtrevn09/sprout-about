@@ -34,6 +34,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -51,7 +52,6 @@ function defaultReminderTime() {
   return d;
 }
 
-// Parse a YYYY-MM-DD string as local midnight (avoids UTC off-by-one)
 function parseLocalDate(str: string): Date {
   const [y, m, d] = str.split('-').map(Number);
   return new Date(y, m - 1, d, 0, 0, 0, 0);
@@ -70,6 +70,10 @@ function formatScheduledDate(dateStr: string): string {
   });
 }
 
+function timeStringFromDate(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 export default function PlantDetailScreen() {
   const { id, showConfirm } = useLocalSearchParams<{ id: string; showConfirm?: string }>();
   const plantId = Number(id);
@@ -83,10 +87,12 @@ export default function PlantDetailScreen() {
   const [fertLogs, setFertLogs] = useState<FertilizerLog[]>([]);
   const [plantNotes, setPlantNotes] = useState<PlantNote[]>([]);
   const [nextScheduledDate, setNextScheduledDate] = useState<string | null>(null);
+  const [scheduleRepeatDays, setScheduleRepeatDays] = useState<number | null>(null);
+  const [scheduleNotifTime, setScheduleNotifTime] = useState<string | null>(null);
 
   const [hasUnsaved, setHasUnsaved] = useState(false);
 
-  // Confirm fertilization modal (opened from notification tap)
+  // Confirm fertilization modal (from notification tap)
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
 
   // Add fertilizer log modal
@@ -105,6 +111,8 @@ export default function PlantDetailScreen() {
   const [alertModalVisible, setAlertModalVisible] = useState(false);
   const [alertDate, setAlertDate] = useState<Date | null>(null);
   const [alertTime, setAlertTime] = useState<Date>(defaultReminderTime());
+  const [repeatEnabled, setRepeatEnabled] = useState(false);
+  const [repeatDaysInput, setRepeatDaysInput] = useState('');
 
   // Add note modal
   const [noteModalVisible, setNoteModalVisible] = useState(false);
@@ -113,9 +121,7 @@ export default function PlantDetailScreen() {
   // Full-screen photo viewer
   const [viewPhotoUri, setViewPhotoUri] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, [plantId]);
+  useEffect(() => { loadData(); }, [plantId]);
 
   useEffect(() => {
     if (showConfirm === '1' && !confirmShown.current) {
@@ -135,7 +141,10 @@ export default function PlantDetailScreen() {
     setFertLogs(getFertilizerLogs(plantId));
     setPhotos(getPlantPhotos(plantId));
     setPlantNotes(getPlantNotes(plantId));
-    setNextScheduledDate(getPlantSchedule(plantId)?.scheduled_for ?? null);
+    const sched = getPlantSchedule(plantId);
+    setNextScheduledDate(sched?.scheduled_for ?? null);
+    setScheduleRepeatDays(sched?.repeat_days ?? null);
+    setScheduleNotifTime(sched?.notification_time ?? null);
   }
 
   function handleSave() {
@@ -208,8 +217,7 @@ export default function PlantDetailScreen() {
     Alert.alert('Delete Log', 'Remove this fertilizer entry?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => {
-        deleteFertilizerLog(logId);
-        setFertLogs(getFertilizerLogs(plantId));
+        deleteFertilizerLog(logId); setFertLogs(getFertilizerLogs(plantId));
       }},
     ]);
   }
@@ -232,19 +240,43 @@ export default function PlantDetailScreen() {
     setEditingLog(null);
   }
 
+  // ── Repeat auto-reschedule ───────────────────────────────────────────────────
+  async function autoReschedule(repeatDays: number, notifTime: string) {
+    const [h, m] = notifTime.split(':').map(Number);
+    const nextDate = new Date();
+    nextDate.setDate(nextDate.getDate() + repeatDays);
+    nextDate.setHours(h ?? 9, m ?? 0, 0, 0);
+    const notifId = await scheduleFertilizerReminder(name || plant?.name || 'plant', plantId, nextDate);
+    const scheduledStr = nextDate.toISOString().slice(0, 10);
+    upsertPlantSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
+    setNextScheduledDate(scheduledStr);
+    setScheduleRepeatDays(repeatDays);
+    setScheduleNotifTime(notifTime);
+  }
+
   // ── Confirm (from notification) ──────────────────────────────────────────────
   function handleConfirmYes() {
     setConfirmModalVisible(false);
-    clearPlantSchedule(plantId);
-    setNextScheduledDate(null);
+    const sched = getPlantSchedule(plantId);
+    if (sched?.repeat_days) {
+      autoReschedule(sched.repeat_days, sched.notification_time ?? '09:00');
+    } else {
+      clearPlantSchedule(plantId);
+      setNextScheduledDate(null);
+    }
     openFertModal(todayStart());
   }
 
   function handleConfirmNo() {
     addFertilizerLog(plantId, MISSED_FERTILIZER_TYPE, new Date().toISOString().slice(0, 10), null);
     setFertLogs(getFertilizerLogs(plantId));
-    clearPlantSchedule(plantId);
-    setNextScheduledDate(null);
+    const sched = getPlantSchedule(plantId);
+    if (sched?.repeat_days) {
+      autoReschedule(sched.repeat_days, sched.notification_time ?? '09:00');
+    } else {
+      clearPlantSchedule(plantId);
+      setNextScheduledDate(null);
+    }
     setConfirmModalVisible(false);
   }
 
@@ -262,19 +294,30 @@ export default function PlantDetailScreen() {
       Alert.alert('Invalid date', 'Please select a future date and time.');
       return;
     }
+    const repeatDays = repeatEnabled ? (parseInt(repeatDaysInput, 10) || null) : null;
+    if (repeatEnabled && !repeatDays) {
+      Alert.alert('Invalid repeat', 'Please enter a valid number of days.');
+      return;
+    }
+    const notifTime = timeStringFromDate(alertTime);
     const notifId = await scheduleFertilizerReminder(name || plant?.name || 'plant', plantId, combined);
     const scheduledStr = alertDate.toISOString().slice(0, 10);
-    upsertPlantSchedule(plantId, scheduledStr, notifId);
+    upsertPlantSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
     setNextScheduledDate(scheduledStr);
+    setScheduleRepeatDays(repeatDays);
+    setScheduleNotifTime(notifTime);
 
     setAlertModalVisible(false);
     setAlertDate(null);
     setAlertTime(defaultReminderTime());
+    setRepeatEnabled(false);
+    setRepeatDaysInput('');
 
     if (notifId) {
       const label = combined.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       const time = combined.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      Alert.alert('Reminder Set', `You'll be notified on ${label} at ${time}.`);
+      const repeatNote = repeatDays ? ` — repeats every ${repeatDays} day${repeatDays === 1 ? '' : 's'}` : '';
+      Alert.alert('Reminder Set', `You'll be notified on ${label} at ${time}${repeatNote}.`);
     } else {
       Alert.alert('Permission denied', 'Enable notifications in Settings to use reminders.');
     }
@@ -307,10 +350,12 @@ export default function PlantDetailScreen() {
 
   const bannerText =
     daysUntil === null ? null :
-    daysUntil < 0 ? `Fertilization overdue by ${Math.abs(daysUntil)} day${Math.abs(daysUntil) === 1 ? '' : 's'} — fertilize now!` :
-    daysUntil === 0 ? 'Fertilize today!' :
+    daysUntil < 0 ? `Fertilization overdue by ${Math.abs(daysUntil)} day${Math.abs(daysUntil) === 1 ? '' : 's'} — tap to log` :
+    daysUntil === 0 ? 'Fertilize today! — tap to log' :
     daysUntil === 1 ? 'Fertilize tomorrow!' :
     `Fertilize in ${daysUntil} days`;
+
+  const bannerTappable = daysUntil !== null && daysUntil <= 0;
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -319,9 +364,12 @@ export default function PlantDetailScreen() {
 
         {/* Fertilizer countdown banner */}
         {bannerText && (
-          <View style={[styles.banner, { backgroundColor: bannerColor! }]}>
+          <Pressable
+            style={[styles.banner, { backgroundColor: bannerColor! }]}
+            onPress={bannerTappable ? () => openFertModal(todayStart()) : undefined}
+          >
             <Text style={styles.bannerText}>{bannerText}</Text>
-          </View>
+          </Pressable>
         )}
 
         {/* Plant Info */}
@@ -420,11 +468,11 @@ export default function PlantDetailScreen() {
             })
           )}
 
-          {/* Next scheduled date */}
           {nextScheduledDate && (
             <View style={styles.scheduleRow}>
               <Text style={styles.scheduleText}>
                 📅  Next scheduled: {formatScheduledDate(nextScheduledDate)}
+                {scheduleRepeatDays ? `  ·  repeats every ${scheduleRepeatDays}d` : ''}
               </Text>
             </View>
           )}
@@ -446,7 +494,7 @@ export default function PlantDetailScreen() {
         </Pressable>
       </Modal>
 
-      {/* Confirm fertilization (from notification) */}
+      {/* Confirm fertilization */}
       <Modal visible={confirmModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
@@ -566,21 +614,56 @@ export default function PlantDetailScreen() {
       {/* Schedule Reminder */}
       <Modal visible={alertModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Schedule Fertilizer Reminder</Text>
-            <Text style={styles.fieldLabelDark}>Date</Text>
-            <DateTimePickerInput value={alertDate} onChange={setAlertDate} mode="date" placeholder="Select date…" />
-            <Text style={styles.fieldLabelDark}>Time</Text>
-            <DateTimePickerInput value={alertTime} onChange={setAlertTime} mode="time" />
-            <View style={styles.modalBtns}>
-              <Pressable style={styles.btnCancel} onPress={() => { setAlertModalVisible(false); setAlertDate(null); setAlertTime(defaultReminderTime()); }}>
-                <Text style={styles.btnCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={styles.btnAdd} onPress={handleScheduleAlert}>
-                <Text style={styles.btnAddText}>Set Reminder</Text>
-              </Pressable>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <View style={styles.modal}>
+              <Text style={styles.modalTitle}>Schedule Fertilizer Reminder</Text>
+              <Text style={styles.fieldLabelDark}>Date</Text>
+              <DateTimePickerInput value={alertDate} onChange={setAlertDate} mode="date" placeholder="Select date…" />
+              <Text style={styles.fieldLabelDark}>Time</Text>
+              <DateTimePickerInput value={alertTime} onChange={setAlertTime} mode="time" />
+
+              {/* Repeat */}
+              <View style={styles.repeatRow}>
+                <Text style={styles.repeatLabel}>Repeat reminder</Text>
+                <Switch
+                  value={repeatEnabled}
+                  onValueChange={setRepeatEnabled}
+                  trackColor={{ false: '#ddd', true: '#3a7d44' }}
+                  thumbColor="#fff"
+                />
+              </View>
+              {repeatEnabled && (
+                <View style={styles.repeatDaysRow}>
+                  <Text style={styles.fieldLabelDark}>Repeat every</Text>
+                  <TextInput
+                    style={styles.repeatDaysInput}
+                    value={repeatDaysInput}
+                    onChangeText={setRepeatDaysInput}
+                    keyboardType="number-pad"
+                    placeholder="e.g., 14"
+                    placeholderTextColor="#aaa"
+                    maxLength={3}
+                  />
+                  <Text style={styles.repeatDaysUnit}>days</Text>
+                </View>
+              )}
+
+              <View style={styles.modalBtns}>
+                <Pressable style={styles.btnCancel} onPress={() => {
+                  setAlertModalVisible(false);
+                  setAlertDate(null);
+                  setAlertTime(defaultReminderTime());
+                  setRepeatEnabled(false);
+                  setRepeatDaysInput('');
+                }}>
+                  <Text style={styles.btnCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable style={styles.btnAdd} onPress={handleScheduleAlert}>
+                  <Text style={styles.btnAddText}>Set Reminder</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -601,79 +684,48 @@ const styles = StyleSheet.create({
   },
   bannerText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   sectionLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#3a7d44',
-    letterSpacing: 1,
-    marginBottom: 8,
-    marginTop: 20,
-    paddingHorizontal: 20,
+    fontSize: 12, fontWeight: '700', color: '#3a7d44',
+    letterSpacing: 1, marginBottom: 8, marginTop: 20, paddingHorizontal: 20,
   },
   card: {
     backgroundColor: 'rgba(255,255,255,0.92)',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    marginHorizontal: 20,
+    borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: '#e0e0e0', marginHorizontal: 20,
   },
   fieldLabel: { fontSize: 13, color: '#666', marginBottom: 4, marginTop: 10 },
   fieldLabelDark: { fontSize: 13, color: '#555', marginBottom: 4, marginTop: 10 },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: '#11181C',
-    backgroundColor: '#fff',
-    marginBottom: 4,
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 11,
+    fontSize: 15, color: '#11181C', backgroundColor: '#fff', marginBottom: 4,
   },
   inputMultiline: { minHeight: 90, textAlignVertical: 'top' },
   btnGreen: {
-    backgroundColor: '#3a7d44',
-    paddingVertical: 13,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 14,
+    backgroundColor: '#3a7d44', paddingVertical: 13,
+    borderRadius: 10, alignItems: 'center', marginTop: 14,
   },
   btnDisabled: { backgroundColor: '#a5c8a8' },
   btnGreenText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   btnGreenFull: {
-    backgroundColor: '#3a7d44',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 16,
+    backgroundColor: '#3a7d44', paddingVertical: 14,
+    borderRadius: 12, alignItems: 'center', marginTop: 16,
   },
   btnMissedFull: {
-    backgroundColor: '#e67e22',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 10,
+    backgroundColor: '#e67e22', paddingVertical: 14,
+    borderRadius: 12, alignItems: 'center', marginTop: 10,
   },
   btnMissedText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   btnDismiss: { alignItems: 'center', marginTop: 14 },
   btnDismissText: { color: '#888', fontSize: 14 },
   btnOutline: {
-    borderWidth: 1.5,
-    borderColor: '#3a7d44',
-    paddingVertical: 11,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 12,
+    borderWidth: 1.5, borderColor: '#3a7d44',
+    paddingVertical: 11, borderRadius: 10, alignItems: 'center', marginTop: 12,
   },
   btnOutlineText: { color: '#3a7d44', fontWeight: '600', fontSize: 15 },
   btnAlert: { borderColor: '#e67e22', marginTop: 8 },
   btnAlertText: { color: '#e67e22', fontWeight: '600', fontSize: 15 },
   emptySmall: { color: '#999', fontSize: 14, marginBottom: 4 },
-  noteRow: {
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
-  },
+  noteRow: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e0e0e0' },
   noteDate: { fontSize: 12, color: '#3a7d44', fontWeight: '600', marginBottom: 4 },
   noteContent: { fontSize: 15, color: '#11181C', lineHeight: 21 },
   photoRow: { marginBottom: 4 },
@@ -681,12 +733,9 @@ const styles = StyleSheet.create({
   photoImg: { width: 90, height: 90, borderRadius: 10, backgroundColor: '#ddd' },
   photoDate: { fontSize: 11, color: '#888', marginTop: 3 },
   fertRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'flex-start', paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee',
   },
   fertRowMissed: { backgroundColor: '#fff8f0', borderRadius: 8, paddingHorizontal: 8, marginBottom: 4 },
   fertRowLeft: { flex: 1, paddingRight: 12 },
@@ -697,25 +746,34 @@ const styles = StyleSheet.create({
   fertDate: { fontSize: 13, color: '#888', paddingTop: 2 },
   fertDateMissed: { color: '#e67e22' },
   scheduleRow: {
-    marginTop: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: '#f0f7f0',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#c8e6c9',
+    marginTop: 14, paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: '#f0f7f0', borderRadius: 8, borderWidth: 1, borderColor: '#c8e6c9',
   },
   scheduleText: { fontSize: 14, color: '#3a7d44', fontWeight: '600' },
+  repeatRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginTop: 16,
+    paddingVertical: 4,
+  },
+  repeatLabel: { fontSize: 15, color: '#11181C', fontWeight: '500' },
+  repeatDaysRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8,
+  },
+  repeatDaysInput: {
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10,
+    fontSize: 15, color: '#11181C', backgroundColor: '#fff',
+    width: 80, textAlign: 'center',
+  },
+  repeatDaysUnit: { fontSize: 15, color: '#555' },
   photoModalBg: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
     justifyContent: 'center', alignItems: 'center',
   },
   photoFull: { width: '100%', height: '80%' },
   modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center', paddingHorizontal: 28,
   },
   modal: { backgroundColor: '#fff', borderRadius: 16, padding: 24 },
   modalTitle: { fontSize: 18, fontWeight: '700', color: '#11181C', marginBottom: 6 },
