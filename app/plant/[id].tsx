@@ -1,29 +1,39 @@
 import { DateTimePickerInput } from '@/components/date-time-picker-input';
+import { EmojiPicker } from '@/components/emoji-picker';
 import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
 import {
   addFertilizerLog,
   addPlantNote,
   addPlantPhoto,
+  addTreatmentLog,
   clearPlantSchedule,
+  clearTreatmentSchedule,
   deleteFertilizerLog,
   deletePlantNote,
   deletePlantPhoto,
+  deleteTreatmentLog,
   FertilizerLog,
   getFertilizerLogs,
   getPlant,
   getPlantNotes,
   getPlantPhotos,
   getPlantSchedule,
+  getTreatmentLogs,
+  getTreatmentSchedule,
   MISSED_FERTILIZER_TYPE,
+  MISSED_TREATMENT_TYPE,
   Plant,
   PlantNote,
   PlantPhoto,
+  TreatmentLog,
   updateFertilizerLog,
   updatePlant,
+  updateTreatmentLog,
   upsertPlantSchedule,
+  upsertTreatmentSchedule,
 } from '@/lib/database';
-import { scheduleFertilizerReminder } from '@/lib/notifications';
+import { scheduleFertilizerReminder, scheduleTreatmentReminder } from '@/lib/notifications';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
@@ -87,12 +97,18 @@ export default function PlantDetailScreen() {
   const [plant, setPlant] = useState<Plant | null>(null);
   const [name, setName] = useState('');
   const [plantedDate, setPlantedDate] = useState('');
+  const [quantityStr, setQuantityStr] = useState('1');
+  const [emoji, setEmoji] = useState<string | null>(null);
   const [photos, setPhotos] = useState<PlantPhoto[]>([]);
   const [fertLogs, setFertLogs] = useState<FertilizerLog[]>([]);
+  const [treatLogs, setTreatLogs] = useState<TreatmentLog[]>([]);
   const [plantNotes, setPlantNotes] = useState<PlantNote[]>([]);
   const [nextScheduledDate, setNextScheduledDate] = useState<string | null>(null);
   const [scheduleRepeatDays, setScheduleRepeatDays] = useState<number | null>(null);
   const [scheduleNotifTime, setScheduleNotifTime] = useState<string | null>(null);
+  const [nextTreatDate, setNextTreatDate] = useState<string | null>(null);
+  const [treatRepeatDays, setTreatRepeatDays] = useState<number | null>(null);
+  const [treatNotifTime, setTreatNotifTime] = useState<string | null>(null);
 
   const [hasUnsaved, setHasUnsaved] = useState(false);
 
@@ -117,6 +133,25 @@ export default function PlantDetailScreen() {
   const [alertTime, setAlertTime] = useState<Date>(defaultReminderTime());
   const [repeatEnabled, setRepeatEnabled] = useState(false);
   const [repeatDaysInput, setRepeatDaysInput] = useState('');
+
+  // Add treatment log modal
+  const [treatModalVisible, setTreatModalVisible] = useState(false);
+  const [treatType, setTreatType] = useState('');
+  const [treatDate, setTreatDate] = useState<Date | null>(null);
+  const [treatNotes, setTreatNotes] = useState('');
+
+  // Edit missed treatment modal
+  const [editingTreatLog, setEditingTreatLog] = useState<TreatmentLog | null>(null);
+  const [editTreatType, setEditTreatType] = useState('');
+  const [editTreatDate, setEditTreatDate] = useState<Date | null>(null);
+  const [editTreatNotes, setEditTreatNotes] = useState('');
+
+  // Treatment reminder modal
+  const [treatAlertVisible, setTreatAlertVisible] = useState(false);
+  const [treatAlertDate, setTreatAlertDate] = useState<Date | null>(null);
+  const [treatAlertTime, setTreatAlertTime] = useState<Date>(defaultReminderTime());
+  const [treatRepeatEnabled, setTreatRepeatEnabled] = useState(false);
+  const [treatRepeatInput, setTreatRepeatInput] = useState('');
 
   // Add note modal
   const [noteModalVisible, setNoteModalVisible] = useState(false);
@@ -144,15 +179,22 @@ export default function PlantDetailScreen() {
       setPlant(p);
       setName(p.name);
       setPlantedDate(p.planted_date ?? '');
+      setQuantityStr(String(p.quantity ?? 1));
+      setEmoji(p.emoji ?? null);
       navigation.setOptions({ title: p.name });
     }
     setFertLogs(getFertilizerLogs(plantId));
+    setTreatLogs(getTreatmentLogs(plantId));
     setPhotos(getPlantPhotos(plantId));
     setPlantNotes(getPlantNotes(plantId));
     const sched = getPlantSchedule(plantId);
     setNextScheduledDate(sched?.scheduled_for ?? null);
     setScheduleRepeatDays(sched?.repeat_days ?? null);
     setScheduleNotifTime(sched?.notification_time ?? null);
+    const tsched = getTreatmentSchedule(plantId);
+    setNextTreatDate(tsched?.scheduled_for ?? null);
+    setTreatRepeatDays(tsched?.repeat_days ?? null);
+    setTreatNotifTime(tsched?.notification_time ?? null);
   }
 
   function handleSave() {
@@ -160,7 +202,8 @@ export default function PlantDetailScreen() {
       Alert.alert('Name required', 'Please enter a plant name.');
       return;
     }
-    updatePlant(plantId, name.trim(), plantedDate.trim() || null, plant?.notes ?? null);
+    const qty = Math.max(1, parseInt(quantityStr, 10) || 1);
+    updatePlant(plantId, name.trim(), plantedDate.trim() || null, plant?.notes ?? null, qty, emoji);
     navigation.setOptions({ title: name.trim() });
     setHasUnsaved(false);
     Alert.alert('Saved', 'Plant details updated.');
@@ -297,6 +340,117 @@ export default function PlantDetailScreen() {
     setEditingLog(null);
   }
 
+  // ── Treatment log ─────────────────────────────────────────────────────────────
+  function openTreatModal(prefillDate?: Date) {
+    setTreatDate(prefillDate ?? null);
+    setTreatType('');
+    setTreatNotes('');
+    setTreatModalVisible(true);
+  }
+
+  function handleAddTreatLog() {
+    if (!treatType.trim()) {
+      Alert.alert('Required', 'Please enter the treatment / product name.');
+      return;
+    }
+    const date = treatDate ?? todayStart();
+    addTreatmentLog(plantId, treatType.trim(), date.toISOString().slice(0, 10), treatNotes.trim() || null);
+    setTreatLogs(getTreatmentLogs(plantId));
+    setTreatType(''); setTreatDate(null); setTreatNotes('');
+    setTreatModalVisible(false);
+
+    const tsched = getTreatmentSchedule(plantId);
+    if (tsched?.repeat_days) {
+      autoRescheduleTreat(tsched.repeat_days, tsched.notification_time ?? '09:00');
+    } else {
+      clearTreatmentSchedule(plantId);
+      setNextTreatDate(null);
+    }
+  }
+
+  function handleDeleteTreatLog(logId: number) {
+    Alert.alert('Delete Entry', 'Remove this treatment entry?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => {
+        deleteTreatmentLog(logId); setTreatLogs(getTreatmentLogs(plantId));
+      }},
+    ]);
+  }
+
+  function handleOpenEditMissedTreat(log: TreatmentLog) {
+    setEditingTreatLog(log);
+    setEditTreatType('');
+    setEditTreatDate(null);
+    setEditTreatNotes('');
+  }
+
+  function handleSaveEditMissedTreat() {
+    if (!editTreatType.trim() || !editingTreatLog) {
+      Alert.alert('Required', 'Please enter the treatment / product name.');
+      return;
+    }
+    const date = editTreatDate ?? todayStart();
+    updateTreatmentLog(editingTreatLog.id, editTreatType.trim(), date.toISOString().slice(0, 10), editTreatNotes.trim() || null);
+    setTreatLogs(getTreatmentLogs(plantId));
+    setEditingTreatLog(null);
+  }
+
+  // ── Treatment auto-reschedule ────────────────────────────────────────────────
+  async function autoRescheduleTreat(repeatDays: number, notifTime: string) {
+    const [h, m] = notifTime.split(':').map(Number);
+    const nextDate = new Date();
+    nextDate.setDate(nextDate.getDate() + repeatDays);
+    nextDate.setHours(h ?? 9, m ?? 0, 0, 0);
+    const notifId = await scheduleTreatmentReminder(name || plant?.name || 'plant', plantId, nextDate);
+    const scheduledStr = nextDate.toISOString().slice(0, 10);
+    upsertTreatmentSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
+    setNextTreatDate(scheduledStr);
+    setTreatRepeatDays(repeatDays);
+    setTreatNotifTime(notifTime);
+  }
+
+  async function handleScheduleTreatAlert() {
+    if (!treatAlertDate) {
+      Alert.alert('Date required', 'Please select a date for the reminder.');
+      return;
+    }
+    const combined = new Date(
+      treatAlertDate.getFullYear(), treatAlertDate.getMonth(), treatAlertDate.getDate(),
+      treatAlertTime.getHours(), treatAlertTime.getMinutes(), 0
+    );
+    if (combined <= new Date()) {
+      Alert.alert('Invalid date', 'Please select a future date and time.');
+      return;
+    }
+    const repeatDays = treatRepeatEnabled ? (parseInt(treatRepeatInput, 10) || null) : null;
+    if (treatRepeatEnabled && !repeatDays) {
+      Alert.alert('Invalid repeat', 'Please enter a valid number of days.');
+      return;
+    }
+    const notifTime = timeStringFromDate(treatAlertTime);
+    const notifId = await scheduleTreatmentReminder(name || plant?.name || 'plant', plantId, combined);
+    const scheduledStr = treatAlertDate.toISOString().slice(0, 10);
+    upsertTreatmentSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
+    setNextTreatDate(scheduledStr);
+    setTreatRepeatDays(repeatDays);
+    setTreatNotifTime(notifTime);
+
+    setTreatAlertVisible(false);
+    setTreatAlertDate(null);
+    setTreatAlertTime(defaultReminderTime());
+    setTreatRepeatEnabled(false);
+    setTreatRepeatInput('');
+
+    if (notifId) {
+      const label = combined.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      const time = combined.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const repeatNote = repeatDays ? ` — repeats every ${repeatDays} day${repeatDays === 1 ? '' : 's'}` : '';
+      Alert.alert('Reminder Set', `You'll be notified on ${label} at ${time}${repeatNote}.`);
+    } else {
+      Alert.alert('Permission denied', 'Enable notifications in Settings to use reminders.');
+    }
+  }
+
   // ── Repeat auto-reschedule ───────────────────────────────────────────────────
   async function autoReschedule(repeatDays: number, notifTime: string) {
     const [h, m] = notifTime.split(':').map(Number);
@@ -398,7 +552,7 @@ export default function PlantDetailScreen() {
     ]);
   }
 
-  // ── Banner ────────────────────────────────────────────────────────────────────
+  // ── Banners ───────────────────────────────────────────────────────────────────
   const daysUntil = daysFromToday(nextScheduledDate);
   const bannerColor =
     daysUntil === null ? null :
@@ -413,6 +567,21 @@ export default function PlantDetailScreen() {
     `Fertilize in ${daysUntil} days`;
 
   const bannerTappable = daysUntil !== null && daysUntil <= 0;
+
+  const daysUntilTreat = daysFromToday(nextTreatDate);
+  const treatBannerColor =
+    daysUntilTreat === null ? null :
+    daysUntilTreat <= 0 ? '#7b3fa0' :
+    daysUntilTreat <= 7 ? '#5c6bc0' : '#3a7d44';
+
+  const treatBannerText =
+    daysUntilTreat === null ? null :
+    daysUntilTreat < 0 ? `Treatment overdue by ${Math.abs(daysUntilTreat)} day${Math.abs(daysUntilTreat) === 1 ? '' : 's'} — tap to log` :
+    daysUntilTreat === 0 ? 'Apply treatment today! — tap to log' :
+    daysUntilTreat === 1 ? 'Apply treatment tomorrow!' :
+    `Treatment in ${daysUntilTreat} days`;
+
+  const treatBannerTappable = daysUntilTreat !== null && daysUntilTreat <= 0;
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -429,9 +598,24 @@ export default function PlantDetailScreen() {
           </Pressable>
         )}
 
+        {/* Treatment countdown banner */}
+        {treatBannerText && (
+          <Pressable
+            style={[styles.banner, { backgroundColor: treatBannerColor! }]}
+            onPress={treatBannerTappable ? () => openTreatModal(todayStart()) : undefined}
+          >
+            <Text style={styles.bannerText}>{treatBannerText}</Text>
+          </Pressable>
+        )}
+
         {/* Plant Info */}
-        <ThemedText style={styles.sectionLabel}>PLANT INFO</ThemedText>
-        <View style={styles.card}>
+        <View style={[styles.section, { borderColor: '#2e7d32' }]}>
+          <View style={[styles.secHead, { backgroundColor: '#2e7d32' }]}>
+            <Text style={styles.secIcon}>🌿</Text>
+            <Text style={styles.secTitle}>PLANT INFO</Text>
+            <Text style={styles.secDeco}>· 🍃 ·</Text>
+          </View>
+          <View style={styles.secBody}>
           <ThemedText style={styles.fieldLabel}>Name</ThemedText>
           <TextInput
             style={styles.input}
@@ -440,23 +624,64 @@ export default function PlantDetailScreen() {
             placeholder="Plant name"
             placeholderTextColor="#aaa"
           />
-          <ThemedText style={styles.fieldLabel}>Date Planted (YYYY-MM-DD)</ThemedText>
+          <ThemedText style={styles.fieldLabel}>Quantity</ThemedText>
           <TextInput
             style={styles.input}
-            value={plantedDate}
-            onChangeText={(v) => { setPlantedDate(v); setHasUnsaved(true); }}
-            placeholder="e.g., 2025-04-15"
+            value={quantityStr}
+            onChangeText={(v) => { setQuantityStr(v); setHasUnsaved(true); }}
+            placeholder="1"
             placeholderTextColor="#aaa"
-            keyboardType="numbers-and-punctuation"
+            keyboardType="number-pad"
           />
+          <ThemedText style={styles.fieldLabel}>Date Planted</ThemedText>
+          <DateTimePickerInput
+            value={plantedDate ? parseLocalDate(plantedDate) : null}
+            onChange={(date) => {
+              const y = date.getFullYear();
+              const m = String(date.getMonth() + 1).padStart(2, '0');
+              const d = String(date.getDate()).padStart(2, '0');
+              setPlantedDate(`${y}-${m}-${d}`);
+              setHasUnsaved(true);
+            }}
+            mode="date"
+            placeholder="Select planting date…"
+          />
+          {plantedDate ? (() => {
+            const days = Math.floor(
+              (todayStart().getTime() - parseLocalDate(plantedDate).getTime()) / (1000 * 60 * 60 * 24)
+            );
+            const label =
+              days === 0 ? 'Planted today' :
+              days === 1 ? '1 day since planting' :
+              days > 1 ? `${days} days since planting` :
+              `Planting date is ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} away`;
+            return (
+              <View style={styles.daysSinceBox}>
+                <Text style={styles.daysSinceEmoji}>🌱</Text>
+                <Text style={styles.daysSinceText}>{label}</Text>
+              </View>
+            );
+          })() : null}
+          <ThemedText style={styles.fieldLabel}>Plant Icon</ThemedText>
+          <EmojiPicker value={emoji} onChange={(e) => {
+            setEmoji(e);
+            const qty = Math.max(1, parseInt(quantityStr, 10) || 1);
+            updatePlant(plantId, name.trim() || (plant?.name ?? ''), plantedDate.trim() || null, plant?.notes ?? null, qty, e);
+          }} />
           <Pressable style={[styles.btnGreen, !hasUnsaved && styles.btnDisabled]} onPress={handleSave}>
             <Text style={styles.btnGreenText}>Save Changes</Text>
           </Pressable>
+          </View>
         </View>
 
         {/* Notes */}
-        <ThemedText style={styles.sectionLabel}>NOTES</ThemedText>
-        <View style={styles.card}>
+        <View style={[styles.section, { borderColor: '#5d4037' }]}>
+          <View style={[styles.secHead, { backgroundColor: '#5d4037' }]}>
+            <Text style={styles.secIcon}>🍀</Text>
+            <Text style={styles.secTitle}>NOTES</Text>
+            <Text style={styles.secDeco}>· 🌱 ·</Text>
+          </View>
+          <View style={styles.secBody}>
           {plantNotes.length === 0 ? (
             <ThemedText style={styles.emptySmall}>No notes yet. Add your first observation.</ThemedText>
           ) : (
@@ -474,11 +699,17 @@ export default function PlantDetailScreen() {
               {plantNotes.length === 0 ? '+ Add Initial Note' : '+ Add New Note'}
             </Text>
           </Pressable>
+          </View>
         </View>
 
         {/* Photos */}
-        <ThemedText style={styles.sectionLabel}>GROWTH PHOTOS</ThemedText>
-        <View style={styles.card}>
+        <View style={[styles.section, { borderColor: '#00695c' }]}>
+          <View style={[styles.secHead, { backgroundColor: '#00695c' }]}>
+            <Text style={styles.secIcon}>🌸</Text>
+            <Text style={styles.secTitle}>GROWTH PHOTOS</Text>
+            <Text style={styles.secDeco}>· 🌺 ·</Text>
+          </View>
+          <View style={styles.secBody}>
           {photos.length === 0 ? (
             <ThemedText style={styles.emptySmall}>No photos yet. Add one to track growth.</ThemedText>
           ) : (
@@ -535,11 +766,17 @@ export default function PlantDetailScreen() {
               )}
             </>
           )}
+          </View>
         </View>
 
         {/* Fertilizer Log */}
-        <ThemedText style={styles.sectionLabel}>FERTILIZER LOG</ThemedText>
-        <View style={styles.card}>
+        <View style={[styles.section, { borderColor: '#33691e' }]}>
+          <View style={[styles.secHead, { backgroundColor: '#33691e' }]}>
+            <Text style={styles.secIcon}>🌾</Text>
+            <Text style={styles.secTitle}>FERTILIZER LOG</Text>
+            <Text style={styles.secDeco}>· 🍃 ·</Text>
+          </View>
+          <View style={styles.secBody}>
           {fertLogs.length === 0 ? (
             <ThemedText style={styles.emptySmall}>No fertilizer entries yet.</ThemedText>
           ) : (
@@ -581,6 +818,59 @@ export default function PlantDetailScreen() {
           <Pressable style={[styles.btnOutline, styles.btnAlert]} onPress={() => setAlertModalVisible(true)}>
             <Text style={styles.btnAlertText}>Schedule Next Reminder</Text>
           </Pressable>
+          </View>
+        </View>
+
+        {/* Treatment Log */}
+        <View style={[styles.section, { borderColor: '#6a1b9a' }]}>
+          <View style={[styles.secHead, { backgroundColor: '#6a1b9a' }]}>
+            <Text style={styles.secIcon}>🌺</Text>
+            <Text style={styles.secTitle}>TREATMENT LOG</Text>
+            <Text style={styles.secDeco}>· 🌿 ·</Text>
+          </View>
+          <View style={styles.secBody}>
+          {treatLogs.length === 0 ? (
+            <ThemedText style={styles.emptySmall}>No treatment entries yet.</ThemedText>
+          ) : (
+            treatLogs.map((log) => {
+              const isMissed = log.treatment_type === MISSED_TREATMENT_TYPE;
+              return (
+                <Pressable
+                  key={log.id}
+                  style={[styles.fertRow, isMissed && styles.fertRowMissed]}
+                  onPress={isMissed ? () => handleOpenEditMissedTreat(log) : undefined}
+                  onLongPress={() => handleDeleteTreatLog(log.id)}
+                >
+                  <View style={styles.fertRowLeft}>
+                    <Text style={[styles.fertType, isMissed && styles.fertTypeMissed]}>
+                      {isMissed ? '⚠ Missed scheduled treatment' : log.treatment_type}
+                    </Text>
+                    {isMissed
+                      ? <Text style={styles.fertTapHint}>Tap to log actual details</Text>
+                      : log.notes ? <Text style={styles.fertNotes}>{log.notes}</Text> : null}
+                  </View>
+                  <Text style={[styles.fertDate, isMissed && styles.fertDateMissed]}>{log.treated_at}</Text>
+                </Pressable>
+              );
+            })
+          )}
+
+          {nextTreatDate && (
+            <View style={styles.scheduleRow}>
+              <Text style={styles.scheduleText}>
+                📅  Next treatment: {formatScheduledDate(nextTreatDate)}
+                {treatRepeatDays ? `  ·  repeats every ${treatRepeatDays}d` : ''}
+              </Text>
+            </View>
+          )}
+
+          <Pressable style={styles.btnOutline} onPress={() => openTreatModal()}>
+            <Text style={styles.btnOutlineText}>+ Log Treatment</Text>
+          </Pressable>
+          <Pressable style={[styles.btnOutline, styles.btnTreatAlert]} onPress={() => setTreatAlertVisible(true)}>
+            <Text style={styles.btnTreatAlertText}>Schedule Next Reminder</Text>
+          </Pressable>
+          </View>
         </View>
 
       </ScrollView>
@@ -740,6 +1030,126 @@ export default function PlantDetailScreen() {
         </View>
       </Modal>
 
+      {/* Add Treatment Log */}
+      <Modal visible={treatModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Log Treatment</Text>
+            <Text style={styles.fieldLabelDark}>Treatment / Product</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., Neem Oil, Pyrethrin Spray"
+              placeholderTextColor="#aaa"
+              value={treatType}
+              onChangeText={setTreatType}
+            />
+            <Text style={styles.fieldLabelDark}>Date Applied</Text>
+            <DateTimePickerInput value={treatDate} onChange={setTreatDate} mode="date" placeholder="Select date…" />
+            <Text style={styles.fieldLabelDark}>Notes (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Concentration, target pest, observations…"
+              placeholderTextColor="#aaa"
+              value={treatNotes}
+              onChangeText={setTreatNotes}
+            />
+            <View style={styles.modalBtns}>
+              <Pressable style={styles.btnCancel} onPress={() => { setTreatModalVisible(false); setTreatType(''); setTreatDate(null); setTreatNotes(''); }}>
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.btnAdd} onPress={handleAddTreatLog}>
+                <Text style={styles.btnAddText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Missed Treatment */}
+      <Modal visible={!!editingTreatLog} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Update Missed Treatment</Text>
+            <Text style={styles.fieldLabelDark}>Treatment / Product</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., Neem Oil"
+              placeholderTextColor="#aaa"
+              value={editTreatType}
+              onChangeText={setEditTreatType}
+            />
+            <Text style={styles.fieldLabelDark}>Date Applied</Text>
+            <DateTimePickerInput value={editTreatDate} onChange={setEditTreatDate} mode="date" placeholder="Select date…" />
+            <Text style={styles.fieldLabelDark}>Notes (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Concentration, target pest, observations…"
+              placeholderTextColor="#aaa"
+              value={editTreatNotes}
+              onChangeText={setEditTreatNotes}
+            />
+            <View style={styles.modalBtns}>
+              <Pressable style={styles.btnCancel} onPress={() => setEditingTreatLog(null)}>
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.btnAdd} onPress={handleSaveEditMissedTreat}>
+                <Text style={styles.btnAddText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Schedule Treatment Reminder */}
+      <Modal visible={treatAlertVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Schedule Treatment Reminder</Text>
+            <Text style={styles.fieldLabelDark}>Date</Text>
+            <DateTimePickerInput value={treatAlertDate} onChange={setTreatAlertDate} mode="date" placeholder="Select date…" />
+            <Text style={styles.fieldLabelDark}>Time</Text>
+            <DateTimePickerInput value={treatAlertTime} onChange={setTreatAlertTime} mode="time" />
+            <Pressable
+              style={[styles.repeatToggle, treatRepeatEnabled && styles.repeatToggleOn]}
+              onPress={() => setTreatRepeatEnabled(v => !v)}
+            >
+              <Text style={[styles.repeatToggleText, treatRepeatEnabled && styles.repeatToggleTextOn]}>
+                {treatRepeatEnabled ? '✓  Repeat Reminder: ON' : 'Repeat Reminder: OFF'}
+              </Text>
+            </Pressable>
+            {treatRepeatEnabled && (
+              <View style={styles.repeatDaysRow}>
+                <Text style={styles.fieldLabelDark}>Repeat every</Text>
+                <TextInput
+                  style={styles.repeatDaysInput}
+                  value={treatRepeatInput}
+                  onChangeText={setTreatRepeatInput}
+                  keyboardType="number-pad"
+                  placeholder="14"
+                  placeholderTextColor="#aaa"
+                  maxLength={3}
+                />
+                <Text style={styles.repeatDaysUnit}>days</Text>
+              </View>
+            )}
+            <View style={styles.modalBtns}>
+              <Pressable style={styles.btnCancel} onPress={() => {
+                setTreatAlertVisible(false);
+                setTreatAlertDate(null);
+                setTreatAlertTime(defaultReminderTime());
+                setTreatRepeatEnabled(false);
+                setTreatRepeatInput('');
+              }}>
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.btnAdd} onPress={handleScheduleTreatAlert}>
+                <Text style={styles.btnAddText}>Set Reminder</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Schedule Reminder */}
       <Modal visible={alertModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
@@ -800,6 +1210,38 @@ export default function PlantDetailScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { paddingBottom: 60 },
+  section: {
+    marginHorizontal: 20,
+    marginTop: 20,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  secHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  secIcon: { fontSize: 16 },
+  secTitle: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    color: '#fff',
+  },
+  secDeco: { fontSize: 12, color: 'rgba(255,255,255,0.55)' },
+  secBody: {
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    padding: 16,
+  },
   banner: {
     marginHorizontal: 20,
     marginTop: 16,
@@ -850,6 +1292,22 @@ const styles = StyleSheet.create({
   btnOutlineText: { color: '#3a7d44', fontWeight: '600', fontSize: 15 },
   btnAlert: { borderColor: '#e67e22', marginTop: 8 },
   btnAlertText: { color: '#e67e22', fontWeight: '600', fontSize: 15 },
+  btnTreatAlert: { borderColor: '#7b3fa0', marginTop: 8 },
+  btnTreatAlertText: { color: '#7b3fa0', fontWeight: '600', fontSize: 15 },
+  daysSinceBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f0f7f0',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#c8e6c9',
+  },
+  daysSinceEmoji: { fontSize: 18 },
+  daysSinceText: { fontSize: 15, fontWeight: '600', color: '#2e5c35' },
   emptySmall: { color: '#999', fontSize: 14, marginBottom: 4 },
   noteRow: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e0e0e0' },
   noteDate: { fontSize: 12, color: '#3a7d44', fontWeight: '600', marginBottom: 4 },

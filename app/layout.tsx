@@ -2,21 +2,28 @@ import { GardenBackground } from '@/components/garden-background';
 import { useAuth } from '@/context/auth';
 import {
   addLayoutShape,
+  createLayout,
+  deleteLayout,
   deleteLayoutShape,
   GardenBed,
+  GardenLayout,
   getGardenBeds,
+  getLayouts,
   getLayoutShapes,
-  getOrCreateLayout,
+  getOrCreateDefaultLayout,
   getPlants,
   LayoutShape,
+  renameLayout,
+  reorderLayouts,
   updateLayoutCanvas,
   updateLayoutShape,
   updateShapeTransform,
 } from '@/lib/database';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated as RNAnimated,
   Dimensions,
   Modal,
   Pressable,
@@ -35,7 +42,8 @@ import Animated, {
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const H_PAD = 20;
 const CANVAS_MAX_W = SCREEN_W - H_PAD * 2;
-const CANVAS_MAX_H = SCREEN_H - 280;
+const CANVAS_MAX_H = SCREEN_H - 340;
+const CARD_HEADER_H = 56;
 
 const SHAPE_COLORS = [
   '#c8e6c9', '#a5d6a7', '#d7ccc8', '#b3e5fc',
@@ -46,6 +54,31 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function snapAngle(r: number): number {
+  const SNAP = 0.2;
+  const twoPi = Math.PI * 2;
+  const norm = ((r % twoPi) + twoPi) % twoPi;
+  const cardinals = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, twoPi];
+  for (const c of cardinals) {
+    if (Math.abs(norm - c) < SNAP) return r + (c - norm);
+  }
+  return r;
+}
+
+function aabbOverlap(
+  ax: number, ay: number, aw: number, ah: number, ar: number,
+  bx: number, by: number, bw: number, bh: number, br: number
+): boolean {
+  const cosA = Math.abs(Math.cos(ar)), sinA = Math.abs(Math.sin(ar));
+  const cosB = Math.abs(Math.cos(br)), sinB = Math.abs(Math.sin(br));
+  const aAW = cosA * aw + sinA * ah, aAH = sinA * aw + cosA * ah;
+  const bAW = cosB * bw + sinB * bh, bAH = sinB * bw + cosB * bh;
+  const aCX = ax + aw / 2, aCY = ay + ah / 2;
+  const bCX = bx + bw / 2, bCY = by + bh / 2;
+  return Math.abs(aCX - bCX) < (aAW + bAW) / 2 &&
+         Math.abs(aCY - bCY) < (aAH + bAH) / 2;
+}
+
 // ── DraggableShape ─────────────────────────────────────────────────────────────
 
 type DSProps = {
@@ -53,22 +86,30 @@ type DSProps = {
   scale: number;
   canvasWFt: number;
   canvasHFt: number;
+  otherShapes: LayoutShape[];
   plantCount: number;
   linkedBedName: string | null;
   onTap: () => void;
   onTransformSave: (id: number, x: number, y: number, rotation: number) => void;
 };
 
+const HANDLE_SIZE = 34;
+
 function DraggableShape({
-  shape, scale, canvasWFt, canvasHFt,
+  shape, scale, canvasWFt, canvasHFt, otherShapes,
   plantCount, linkedBedName, onTap, onTransformSave,
 }: DSProps) {
+  const [rotMode, setRotMode] = useState(false);
+
   const posX = useSharedValue(shape.x * scale);
   const posY = useSharedValue(shape.y * scale);
   const rotation = useSharedValue(shape.rotation);
   const savedX = useSharedValue(shape.x * scale);
   const savedY = useSharedValue(shape.y * scale);
   const savedRot = useSharedValue(shape.rotation);
+
+  const othersRef = useRef(otherShapes);
+  othersRef.current = otherShapes;
 
   useEffect(() => {
     posX.value = shape.x * scale;
@@ -79,42 +120,120 @@ function DraggableShape({
     savedRot.value = shape.rotation;
   }, [shape.x, shape.y, shape.rotation, scale]);
 
-  // runOnJS(true): Reanimated v4 + RNGH v2 worklet compilation is unreliable; JS-thread callbacks with shared value writes are synchronous on new arch
-  const panGesture = Gesture.Pan()
+  const pxW = shape.width_ft * scale;
+  const pxH = shape.height_ft * scale;
+  const isCircle = shape.shape_type === 'circle';
+  const textRotated = !isCircle && pxH > pxW * 1.4;
+
+  const longPress = Gesture.LongPress()
     .runOnJS(true)
+    .minDuration(500)
+    .maxDistance(8)
+    .onStart(() => setRotMode(true));
+
+  const tapGesture = Gesture.Tap()
+    .runOnJS(true)
+    .maxDuration(400)
+    .onEnd(() => {
+      if (rotMode) setRotMode(false);
+      else onTap();
+    });
+
+  const movePan = Gesture.Pan()
+    .runOnJS(true)
+    .enabled(!rotMode)
+    .activeOffsetX([-8, 8])
+    .activeOffsetY([-8, 8])
     .onBegin(() => {
       savedX.value = posX.value;
       savedY.value = posY.value;
     })
     .onUpdate((e) => {
-      posX.value = clamp(savedX.value + e.translationX, 0, (canvasWFt - shape.width_ft) * scale);
-      posY.value = clamp(savedY.value + e.translationY, 0, (canvasHFt - shape.height_ft) * scale);
-    })
-    .onEnd((e) => {
-      const dist = Math.sqrt(e.translationX * e.translationX + e.translationY * e.translationY);
-      const rotDiff = Math.abs(rotation.value - savedRot.value);
-      if (dist < 8 && rotDiff < 0.1) {
-        posX.value = savedX.value;
-        posY.value = savedY.value;
-        onTap();
-      } else {
-        onTransformSave(shape.id, posX.value / scale, posY.value / scale, rotation.value);
-      }
-    });
+      const myW = shape.width_ft * scale;
+      const myH = shape.height_ft * scale;
+      const rot = rotation.value;
+      const cosA = Math.abs(Math.cos(rot));
+      const sinA = Math.abs(Math.sin(rot));
+      const aabbW = cosA * myW + sinA * myH;
+      const aabbH = sinA * myW + cosA * myH;
+      const canvasPxW = canvasWFt * scale;
+      const canvasPxH = canvasHFt * scale;
+      const minX = aabbW / 2 - myW / 2;
+      const maxX = canvasPxW - myW / 2 - aabbW / 2;
+      const minY = aabbH / 2 - myH / 2;
+      const maxY = canvasPxH - myH / 2 - aabbH / 2;
+      const targetX = clamp(savedX.value + e.translationX, minX, maxX);
+      const targetY = clamp(savedY.value + e.translationY, minY, maxY);
 
-  const rotGesture = Gesture.Rotation()
-    .runOnJS(true)
-    .onBegin(() => {
-      savedRot.value = rotation.value;
-    })
-    .onUpdate((e) => {
-      rotation.value = savedRot.value + e.rotation;
+      const hits = (x: number, y: number) => othersRef.current.some(o =>
+        aabbOverlap(x, y, myW, myH, rot,
+          o.x * scale, o.y * scale, o.width_ft * scale, o.height_ft * scale, o.rotation)
+      );
+
+      if (!hits(targetX, targetY)) {
+        posX.value = targetX; posY.value = targetY;
+      } else if (!hits(targetX, posY.value)) {
+        posX.value = targetX;
+      } else if (!hits(posX.value, targetY)) {
+        posY.value = targetY;
+      }
     })
     .onEnd(() => {
-      onTransformSave(shape.id, posX.value / scale, posY.value / scale, rotation.value);
+      const SNAP = 12;
+      const rot = rotation.value;
+      const cosA = Math.abs(Math.cos(rot));
+      const sinA = Math.abs(Math.sin(rot));
+      const myW = shape.width_ft * scale;
+      const myH = shape.height_ft * scale;
+      const aabbW = cosA * myW + sinA * myH;
+      const aabbH = sinA * myW + cosA * myH;
+      const canvasPxW = canvasWFt * scale;
+      const canvasPxH = canvasHFt * scale;
+      const minX = aabbW / 2 - myW / 2;
+      const maxX = canvasPxW - myW / 2 - aabbW / 2;
+      const minY = aabbH / 2 - myH / 2;
+      const maxY = canvasPxH - myH / 2 - aabbH / 2;
+      let nx = posX.value;
+      let ny = posY.value;
+      if (nx - minX < SNAP) nx = minX;
+      else if (maxX - nx < SNAP) nx = maxX;
+      if (ny - minY < SNAP) ny = minY;
+      else if (maxY - ny < SNAP) ny = maxY;
+      posX.value = nx; posY.value = ny;
+      onTransformSave(shape.id, nx / scale, ny / scale, rotation.value);
     });
 
-  const composed = Gesture.Simultaneous(panGesture, rotGesture);
+  const twoFingerRot = Gesture.Rotation()
+    .runOnJS(true)
+    .enabled(!rotMode)
+    .onBegin(() => { savedRot.value = rotation.value; })
+    .onUpdate((e) => { rotation.value = savedRot.value + e.rotation; })
+    .onEnd(() => {
+      const snapped = snapAngle(rotation.value);
+      rotation.value = snapped;
+      onTransformSave(shape.id, posX.value / scale, posY.value / scale, snapped);
+    });
+
+  const handlePan = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX([-6, 6])
+    .activeOffsetY([-6, 6])
+    .onBegin(() => { savedRot.value = rotation.value; })
+    .onUpdate((e) => {
+      rotation.value = savedRot.value + e.translationX * (Math.PI / 160);
+    })
+    .onEnd(() => {
+      const snapped = snapAngle(rotation.value);
+      rotation.value = snapped;
+      onTransformSave(shape.id, posX.value / scale, posY.value / scale, snapped);
+      setRotMode(false);
+    });
+
+  const mainGesture = Gesture.Race(
+    longPress,
+    tapGesture,
+    Gesture.Simultaneous(movePan, twoFingerRot)
+  );
 
   const animStyle = useAnimatedStyle(() => ({
     left: posX.value,
@@ -122,44 +241,60 @@ function DraggableShape({
     transform: [{ rotate: `${rotation.value}rad` }],
   }));
 
-  const pxW = shape.width_ft * scale;
-  const pxH = shape.height_ft * scale;
-  const isCircle = shape.shape_type === 'circle';
-
   return (
-    <GestureDetector gesture={composed}>
+    <GestureDetector gesture={mainGesture}>
       <Animated.View
         style={[
-          ss.shape,
+          ss.shapeOuter,
           {
             width: pxW,
             height: pxH,
             backgroundColor: shape.color,
             borderRadius: isCircle ? pxW / 2 : 6,
+            borderColor: rotMode ? '#3a7d44' : 'rgba(0,0,0,0.18)',
+            borderWidth: rotMode ? 2.5 : 1.5,
           },
           animStyle,
         ]}
       >
-        {shape.label ? (
-          <Text style={ss.label} numberOfLines={2} adjustsFontSizeToFit>{shape.label}</Text>
-        ) : null}
-        <Text style={ss.dims}>{shape.width_ft}×{shape.height_ft}ft</Text>
-        {linkedBedName ? (
-          <Text style={ss.bedLink} numberOfLines={1}>🌱 {linkedBedName}</Text>
-        ) : null}
-        {plantCount > 0 ? (
-          <View style={ss.badge}><Text style={ss.badgeText}>{plantCount}</Text></View>
-        ) : null}
+        <View style={textRotated ? [ss.shapeInner, { overflow: 'visible' }] : ss.shapeInner} pointerEvents="none">
+          {textRotated ? (
+            <View style={{ width: pxH, height: pxW, alignItems: 'center', justifyContent: 'center', padding: 3, transform: [{ rotate: '-90deg' }] }}>
+              {shape.label ? <Text style={ss.label} numberOfLines={1} adjustsFontSizeToFit>{shape.label}</Text> : null}
+              {linkedBedName ? <Text style={ss.bedLink} numberOfLines={1}>🌱 {linkedBedName}</Text> : null}
+            </View>
+          ) : (
+            <>
+              {shape.label ? <Text style={ss.label} numberOfLines={2} adjustsFontSizeToFit>{shape.label}</Text> : null}
+              <Text style={ss.dims}>{shape.width_ft}×{shape.height_ft}ft</Text>
+              {linkedBedName ? <Text style={ss.bedLink} numberOfLines={1}>🌱 {linkedBedName}</Text> : null}
+            </>
+          )}
+          {plantCount > 0 ? (
+            <View style={ss.badge}><Text style={ss.badgeText}>{plantCount}</Text></View>
+          ) : null}
+        </View>
+
+        {rotMode && (
+          <GestureDetector gesture={handlePan}>
+            <View style={[ss.rotHandle, { top: -(HANDLE_SIZE + 6), left: pxW / 2 - HANDLE_SIZE / 2 }]}>
+              <Text style={ss.rotHandleText}>↻</Text>
+            </View>
+          </GestureDetector>
+        )}
       </Animated.View>
     </GestureDetector>
   );
 }
 
 const ss = StyleSheet.create({
-  shape: {
+  shapeOuter: {
     position: 'absolute',
-    borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shapeInner: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 3,
@@ -175,6 +310,21 @@ const ss = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   badgeText: { color: '#fff', fontSize: 8, fontWeight: '700' },
+  rotHandle: {
+    position: 'absolute',
+    width: HANDLE_SIZE,
+    height: HANDLE_SIZE,
+    borderRadius: HANDLE_SIZE / 2,
+    backgroundColor: '#3a7d44',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  rotHandleText: { color: '#fff', fontSize: 20, fontWeight: '700', lineHeight: 22 },
 });
 
 // ── Color picker ───────────────────────────────────────────────────────────────
@@ -199,26 +349,93 @@ const cp = StyleSheet.create({
   selected: { borderColor: '#3a7d44', borderWidth: 3 },
 });
 
-// ── Main screen ────────────────────────────────────────────────────────────────
+// ── LayoutCard ─────────────────────────────────────────────────────────────────
 
-export default function LayoutScreen() {
-  const { userId } = useAuth();
-  const router = useRouter();
+type LayoutCardProps = {
+  layout: GardenLayout;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+  index: number;
+  total: number;
+  onReorder: (fromIdx: number, toIdx: number) => void;
+  onReorderEnd: () => void;
+  userId: number;
+  beds: GardenBed[];
+  plantCounts: Record<number, number>;
+  router: ReturnType<typeof useRouter>;
+};
 
-  const [layout, setLayout] = useState({ canvas_width_ft: 20, canvas_height_ft: 15 });
+function LayoutCard({
+  layout, isExpanded, onToggle, onRename, onDelete,
+  index, total, onReorder, onReorderEnd,
+  userId, beds, plantCounts, router,
+}: LayoutCardProps) {
   const [shapes, setShapes] = useState<LayoutShape[]>([]);
-  const [beds, setBeds] = useState<GardenBed[]>([]);
-  const [plantCounts, setPlantCounts] = useState<Record<number, number>>({});
+  const [canvasW, setCanvasW] = useState(layout.canvas_width_ft);
+  const [canvasH, setCanvasH] = useState(layout.canvas_height_ft);
+  const [renaming, setRenaming] = useState(false);
+  const [renameText, setRenameText] = useState(layout.name);
 
-  // Add modal
+  // Stable refs so the drag gesture (created once) never stales
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const totalRef = useRef(total);
+  totalRef.current = total;
+  const onReorderRef = useRef(onReorder);
+  onReorderRef.current = onReorder;
+  const onReorderEndRef = useRef(onReorderEnd);
+  onReorderEndRef.current = onReorderEnd;
+
+  const dragStartIdx = useRef(index);
+
+  // RNAnimated.Value is set via setValue() on the JS thread — immediately visible,
+  // no Reanimated worklet compilation needed. useNativeDriver:true on the spring
+  // gives a smooth snap-back on release.
+  const dragY = useRef(new RNAnimated.Value(0)).current;
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Created once — refs keep it up-to-date without recreating the gesture object
+  const dragGesture = useMemo(() =>
+    Gesture.Pan()
+      .runOnJS(true)
+      .minDistance(4)
+      .activeOffsetY([-8, 8])
+      .failOffsetX([-12, 12])
+      .onBegin(() => {
+        dragStartIdx.current = indexRef.current;
+        dragY.setValue(0);
+        setIsDragging(true);
+      })
+      .onUpdate((e) => {
+        dragY.setValue(e.translationY);
+      })
+      .onEnd((e) => {
+        const delta = Math.round(e.translationY / CARD_HEADER_H);
+        const target = clamp(dragStartIdx.current + delta, 0, totalRef.current - 1);
+        if (target !== indexRef.current) {
+          onReorderRef.current(indexRef.current, target);
+        }
+        onReorderEndRef.current();
+        RNAnimated.spring(dragY, {
+          toValue: 0,
+          useNativeDriver: true,
+          damping: 20,
+          stiffness: 300,
+          mass: 1,
+        }).start(() => setIsDragging(false));
+      }),
+  []);
+
   const [addVisible, setAddVisible] = useState(false);
   const [addType, setAddType] = useState<'rectangle' | 'circle'>('rectangle');
   const [addLabel, setAddLabel] = useState('');
   const [addW, setAddW] = useState('4');
   const [addH, setAddH] = useState('4');
   const [addColor, setAddColor] = useState(SHAPE_COLORS[0]);
+  const [addBedId, setAddBedId] = useState<number | null>(null);
 
-  // Edit modal
   const [editShape, setEditShape] = useState<LayoutShape | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [editW, setEditW] = useState('');
@@ -226,41 +443,38 @@ export default function LayoutScreen() {
   const [editColor, setEditColor] = useState(SHAPE_COLORS[0]);
   const [editBedId, setEditBedId] = useState<number | null>(null);
 
-  // Canvas size modal
   const [canvasVisible, setCanvasVisible] = useState(false);
   const [canvasWIn, setCanvasWIn] = useState('');
   const [canvasHIn, setCanvasHIn] = useState('');
 
-  useEffect(() => { if (userId) loadData(); }, [userId]);
+  useEffect(() => {
+    setCanvasW(layout.canvas_width_ft);
+    setCanvasH(layout.canvas_height_ft);
+  }, [layout.canvas_width_ft, layout.canvas_height_ft]);
 
-  function loadData() {
-    const l = getOrCreateLayout(userId!);
-    setLayout({ canvas_width_ft: l.canvas_width_ft, canvas_height_ft: l.canvas_height_ft });
-    setShapes(getLayoutShapes(userId!));
-    const b = getGardenBeds(userId!);
-    setBeds(b);
-    const counts: Record<number, number> = {};
-    for (const bed of b) counts[bed.id] = getPlants(bed.id).length;
-    setPlantCounts(counts);
-  }
+  useEffect(() => {
+    if (isExpanded) setShapes(getLayoutShapes(layout.id));
+  }, [isExpanded, layout.id]);
 
-  // ── Add ──────────────────────────────────────────────────────────────────────
+  const scaleByW = CANVAS_MAX_W / canvasW;
+  const scaleByH = CANVAS_MAX_H / canvasH;
+  const scale = Math.min(scaleByW, scaleByH);
+  const canvasPxW = Math.round(canvasW * scale);
+  const canvasPxH = Math.round(canvasH * scale);
 
   function handleAddShape() {
     const w = Math.max(0.5, parseFloat(addW) || 4);
     const h = addType === 'circle' ? w : Math.max(0.5, parseFloat(addH) || 4);
-    addLayoutShape(userId!, addType, 0, 0, w, h, addLabel.trim() || null, addColor);
-    setShapes(getLayoutShapes(userId!));
+    addLayoutShape(userId, layout.id, addType, 0, 0, w, h, addLabel.trim() || null, addColor, addBedId);
+    setShapes(getLayoutShapes(layout.id));
     setAddVisible(false);
     resetAddForm();
   }
 
   function resetAddForm() {
     setAddLabel(''); setAddW('4'); setAddH('4');
-    setAddType('rectangle'); setAddColor(SHAPE_COLORS[0]);
+    setAddType('rectangle'); setAddColor(SHAPE_COLORS[0]); setAddBedId(null);
   }
-
-  // ── Edit ─────────────────────────────────────────────────────────────────────
 
   function openEdit(shape: LayoutShape) {
     setEditShape(shape);
@@ -276,7 +490,7 @@ export default function LayoutScreen() {
     const w = Math.max(0.5, parseFloat(editW) || editShape.width_ft);
     const h = editShape.shape_type === 'circle' ? w : Math.max(0.5, parseFloat(editH) || editShape.height_ft);
     updateLayoutShape(editShape.id, editLabel.trim() || null, w, h, editColor, editBedId);
-    setShapes(getLayoutShapes(userId!));
+    setShapes(getLayoutShapes(layout.id));
     setEditShape(null);
   }
 
@@ -286,20 +500,38 @@ export default function LayoutScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => {
         deleteLayoutShape(editShape.id);
-        setShapes(getLayoutShapes(userId!));
+        setShapes(getLayoutShapes(layout.id));
         setEditShape(null);
       }},
     ]);
   }
 
-  // ── Canvas ───────────────────────────────────────────────────────────────────
-
   function handleSaveCanvas() {
-    const w = Math.max(1, parseFloat(canvasWIn) || layout.canvas_width_ft);
-    const h = Math.max(1, parseFloat(canvasHIn) || layout.canvas_height_ft);
-    updateLayoutCanvas(userId!, w, h);
-    setLayout({ canvas_width_ft: w, canvas_height_ft: h });
+    const w = Math.max(1, parseFloat(canvasWIn) || canvasW);
+    const h = Math.max(1, parseFloat(canvasHIn) || canvasH);
+    updateLayoutCanvas(layout.id, w, h);
+    setCanvasW(w);
+    setCanvasH(h);
     setCanvasVisible(false);
+    // Clamp any shapes that now fall outside the new canvas bounds (feet units)
+    setShapes(prev => prev.map(shape => {
+      const mw = shape.width_ft, mh = shape.height_ft;
+      const rot = shape.rotation;
+      const cosA = Math.abs(Math.cos(rot)), sinA = Math.abs(Math.sin(rot));
+      const aabbW = cosA * mw + sinA * mh;
+      const aabbH = sinA * mw + cosA * mh;
+      const minX = aabbW / 2 - mw / 2;
+      const maxX = Math.max(minX, w - mw / 2 - aabbW / 2);
+      const minY = aabbH / 2 - mh / 2;
+      const maxY = Math.max(minY, h - mh / 2 - aabbH / 2);
+      const nx = clamp(shape.x, minX, maxX);
+      const ny = clamp(shape.y, minY, maxY);
+      if (nx !== shape.x || ny !== shape.y) {
+        updateShapeTransform(shape.id, nx, ny, rot);
+        return { ...shape, x: nx, y: ny };
+      }
+      return shape;
+    }));
   }
 
   function handleTransformSave(id: number, x: number, y: number, rotation: number) {
@@ -307,60 +539,113 @@ export default function LayoutScreen() {
     setShapes(prev => prev.map(s => s.id === id ? { ...s, x, y, rotation } : s));
   }
 
-  // ── Canvas sizing: fit both dimensions on screen ──────────────────────────────
-
-  const scaleByW = CANVAS_MAX_W / layout.canvas_width_ft;
-  const scaleByH = CANVAS_MAX_H / layout.canvas_height_ft;
-  const scale = Math.min(scaleByW, scaleByH);
-  const canvasPxW = Math.round(layout.canvas_width_ft * scale);
-  const canvasPxH = Math.round(layout.canvas_height_ft * scale);
-
-  // ── Render ────────────────────────────────────────────────────────────────────
+  function handleRenameSubmit() {
+    const trimmed = renameText.trim();
+    if (trimmed) onRename(trimmed);
+    setRenaming(false);
+  }
 
   return (
-    <GardenBackground style={styles.container}>
-      <View style={styles.inner}>
-        <View style={styles.header}>
-          <Text style={styles.title}>My Layout</Text>
-          <Pressable
-            style={styles.canvasBtn}
-            onPress={() => {
-              setCanvasWIn(String(layout.canvas_width_ft));
-              setCanvasHIn(String(layout.canvas_height_ft));
-              setCanvasVisible(true);
-            }}
-          >
-            <Text style={styles.canvasBtnText}>⚙ Canvas Size</Text>
-          </Pressable>
-        </View>
+    <RNAnimated.View style={[
+      lc.card,
+      isDragging && lc.cardLifted,
+      { transform: [{ translateY: dragY }] },
+    ]}>
+      {/* ── Card Header ── */}
+      <View style={lc.header}>
+        <GestureDetector gesture={dragGesture}>
+          <View style={lc.dragHandle}>
+            <Text style={lc.dragIcon}>≡</Text>
+          </View>
+        </GestureDetector>
 
-        <Text style={styles.canvasInfo}>
-          {layout.canvas_width_ft}ft × {layout.canvas_height_ft}ft  ·  tap to edit  ·  drag to move  ·  two fingers to rotate
-        </Text>
-
-        <View style={[styles.canvas, { width: canvasPxW, height: canvasPxH }]}>
-          {shapes.length === 0 && (
-            <Text style={styles.canvasEmpty}>Tap "+ Add Shape" to place your first garden bed</Text>
-          )}
-          {shapes.map(shape => (
-            <DraggableShape
-              key={shape.id}
-              shape={shape}
-              scale={scale}
-              canvasWFt={layout.canvas_width_ft}
-              canvasHFt={layout.canvas_height_ft}
-              plantCount={shape.bed_id ? (plantCounts[shape.bed_id] ?? 0) : 0}
-              linkedBedName={shape.bed_id ? (beds.find(b => b.id === shape.bed_id)?.name ?? null) : null}
-              onTap={() => openEdit(shape)}
-              onTransformSave={handleTransformSave}
+        <Pressable style={lc.titleArea} onPress={onToggle}>
+          {renaming ? (
+            <TextInput
+              style={lc.renameInput}
+              value={renameText}
+              onChangeText={setRenameText}
+              onBlur={handleRenameSubmit}
+              onSubmitEditing={handleRenameSubmit}
+              autoFocus
             />
-          ))}
-        </View>
+          ) : (
+            <Text style={lc.title} numberOfLines={1}>{layout.name}</Text>
+          )}
+        </Pressable>
 
-        <Pressable style={[styles.addBtn, { width: canvasPxW }]} onPress={() => setAddVisible(true)}>
-          <Text style={styles.addBtnText}>+ Add Shape</Text>
+        {!renaming && (
+          <Pressable
+            style={lc.iconBtn}
+            onPress={() => { setRenameText(layout.name); setRenaming(true); }}
+          >
+            <Text style={lc.iconTxt}>✎</Text>
+          </Pressable>
+        )}
+
+        <Pressable
+          style={lc.iconBtn}
+          onPress={() => Alert.alert(
+            'Delete Layout',
+            `Delete "${layout.name}" and all its shapes?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: onDelete },
+            ]
+          )}
+        >
+          <Text style={[lc.iconTxt, { color: '#c0392b' }]}>✕</Text>
+        </Pressable>
+
+        <Pressable style={lc.chevronBtn} onPress={onToggle}>
+          <Text style={lc.chevron}>{isExpanded ? '▲' : '▼'}</Text>
         </Pressable>
       </View>
+
+      {/* ── Expanded Body ── */}
+      {isExpanded && (
+        <View style={lc.body}>
+          <View style={lc.canvasRow}>
+            <Text style={lc.canvasInfo}>
+              {canvasW}ft × {canvasH}ft · tap to edit · hold to rotate
+            </Text>
+            <Pressable
+              style={lc.canvasBtn}
+              onPress={() => {
+                setCanvasWIn(String(canvasW));
+                setCanvasHIn(String(canvasH));
+                setCanvasVisible(true);
+              }}
+            >
+              <Text style={lc.canvasBtnText}>⚙ Size</Text>
+            </Pressable>
+          </View>
+
+          <View style={[lc.canvas, { width: canvasPxW, height: canvasPxH }]}>
+            {shapes.length === 0 && (
+              <Text style={lc.canvasEmpty}>Tap "+ Add Shape" to place your first garden bed</Text>
+            )}
+            {shapes.map(shape => (
+              <DraggableShape
+                key={shape.id}
+                shape={shape}
+                scale={scale}
+                canvasWFt={canvasW}
+                canvasHFt={canvasH}
+                otherShapes={shapes.filter(s => s.id !== shape.id)}
+                plantCount={shape.bed_id ? (plantCounts[shape.bed_id] ?? 0) : 0}
+                linkedBedName={shape.bed_id ? (beds.find(b => b.id === shape.bed_id)?.name ?? null) : null}
+                onTap={() => openEdit(shape)}
+                onTransformSave={handleTransformSave}
+              />
+            ))}
+          </View>
+
+          <Pressable style={[lc.addBtn, { width: canvasPxW }]} onPress={() => setAddVisible(true)}>
+            <Text style={lc.addBtnText}>+ Add Shape</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* ── Add Shape Modal ── */}
       <Modal visible={addVisible} transparent animationType="fade">
@@ -368,7 +653,6 @@ export default function LayoutScreen() {
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.overlayScroll}>
             <View style={styles.modal}>
               <Text style={styles.modalTitle}>Add Shape</Text>
-
               <View style={styles.typeRow}>
                 {(['rectangle', 'circle'] as const).map(t => (
                   <Pressable
@@ -382,7 +666,6 @@ export default function LayoutScreen() {
                   </Pressable>
                 ))}
               </View>
-
               <Text style={styles.lbl}>Name (optional)</Text>
               <TextInput
                 style={styles.input}
@@ -391,7 +674,6 @@ export default function LayoutScreen() {
                 placeholder="e.g., Tomatoes, Herb Spiral"
                 placeholderTextColor="#aaa"
               />
-
               <Text style={styles.lbl}>{addType === 'circle' ? 'Diameter (ft)' : 'Width (ft)'}</Text>
               <TextInput
                 style={styles.input}
@@ -401,7 +683,6 @@ export default function LayoutScreen() {
                 placeholder="4"
                 placeholderTextColor="#aaa"
               />
-
               {addType === 'rectangle' && (
                 <>
                   <Text style={styles.lbl}>Height (ft)</Text>
@@ -415,10 +696,26 @@ export default function LayoutScreen() {
                   />
                 </>
               )}
-
               <Text style={styles.lbl}>Color</Text>
               <ColorPicker value={addColor} onChange={setAddColor} />
-
+              <Text style={styles.lbl}>Link to Garden Bed</Text>
+              <View style={styles.chipRow}>
+                <Pressable
+                  style={[styles.chip, addBedId === null && styles.chipOn]}
+                  onPress={() => setAddBedId(null)}
+                >
+                  <Text style={[styles.chipTxt, addBedId === null && styles.chipTxtOn]}>None</Text>
+                </Pressable>
+                {beds.map(b => (
+                  <Pressable
+                    key={b.id}
+                    style={[styles.chip, addBedId === b.id && styles.chipOn]}
+                    onPress={() => setAddBedId(b.id)}
+                  >
+                    <Text style={[styles.chipTxt, addBedId === b.id && styles.chipTxtOn]}>{b.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
               <View style={styles.modalBtns}>
                 <Pressable style={styles.btnCancel} onPress={() => { setAddVisible(false); resetAddForm(); }}>
                   <Text style={styles.btnCancelTxt}>Cancel</Text>
@@ -438,7 +735,6 @@ export default function LayoutScreen() {
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.overlayScroll}>
             <View style={styles.modal}>
               <Text style={styles.modalTitle}>Edit Shape</Text>
-
               <Text style={styles.lbl}>Name</Text>
               <TextInput
                 style={styles.input}
@@ -447,7 +743,6 @@ export default function LayoutScreen() {
                 placeholder="e.g., Tomatoes"
                 placeholderTextColor="#aaa"
               />
-
               <Text style={styles.lbl}>{editShape?.shape_type === 'circle' ? 'Diameter (ft)' : 'Width (ft)'}</Text>
               <TextInput
                 style={styles.input}
@@ -457,7 +752,6 @@ export default function LayoutScreen() {
                 placeholder="4"
                 placeholderTextColor="#aaa"
               />
-
               {editShape?.shape_type === 'rectangle' && (
                 <>
                   <Text style={styles.lbl}>Height (ft)</Text>
@@ -471,10 +765,8 @@ export default function LayoutScreen() {
                   />
                 </>
               )}
-
               <Text style={styles.lbl}>Color</Text>
               <ColorPicker value={editColor} onChange={setEditColor} />
-
               <Text style={styles.lbl}>Link to Garden Bed</Text>
               <Text style={styles.sublbl}>Once linked, tap "Open Bed" to navigate to it.</Text>
               <View style={styles.chipRow}>
@@ -494,7 +786,6 @@ export default function LayoutScreen() {
                   </Pressable>
                 ))}
               </View>
-
               {editBedId != null && (
                 <Pressable
                   style={styles.openBedBtn}
@@ -506,7 +797,6 @@ export default function LayoutScreen() {
                   <Text style={styles.openBedTxt}>Open Bed Page →</Text>
                 </Pressable>
               )}
-
               <View style={styles.modalBtns}>
                 <Pressable style={styles.btnDelete} onPress={handleDeleteShape}>
                   <Text style={styles.btnDeleteTxt}>Delete</Text>
@@ -528,7 +818,7 @@ export default function LayoutScreen() {
         <View style={styles.overlay}>
           <View style={[styles.modal, styles.modalPadded]}>
             <Text style={styles.modalTitle}>Canvas Size</Text>
-            <Text style={styles.sublbl}>Set the real-world dimensions of your garden area.</Text>
+            <Text style={styles.sublbl}>Set the real-world dimensions of this garden area.</Text>
             <Text style={styles.lbl}>Width (ft)</Text>
             <TextInput
               style={styles.input}
@@ -558,50 +848,224 @@ export default function LayoutScreen() {
           </View>
         </View>
       </Modal>
+    </RNAnimated.View>
+  );
+}
+
+const lc = StyleSheet.create({
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#dde8dd',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+    zIndex: 1,
+  },
+  cardLifted: {
+    zIndex: 999,
+    elevation: 16,
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    borderColor: '#3a7d44',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: CARD_HEADER_H,
+    paddingHorizontal: 8,
+    gap: 2,
+  },
+  dragHandle: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dragIcon: { fontSize: 20, color: '#aaa', lineHeight: 22 },
+  titleArea: { flex: 1, paddingHorizontal: 4 },
+  title: { fontSize: 17, fontWeight: '700', color: '#2e5c35' },
+  renameInput: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#2e5c35',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#3a7d44',
+    paddingVertical: 2,
+  },
+  iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  iconTxt: { fontSize: 16, color: '#3a7d44' },
+  chevronBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  chevron: { fontSize: 13, color: '#888' },
+  body: { paddingHorizontal: 14, paddingBottom: 16, alignItems: 'center' },
+  canvasRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 8,
+  },
+  canvasInfo: { fontSize: 11, color: '#777', flex: 1 },
+  canvasBtn: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 7, backgroundColor: '#f5f5f5',
+    borderWidth: 1, borderColor: '#ddd',
+  },
+  canvasBtnText: { fontSize: 12, color: '#555' },
+  canvas: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5, borderColor: '#bbb',
+    borderRadius: 4, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
+  },
+  canvasEmpty: {
+    position: 'absolute', top: '40%', left: 0, right: 0,
+    fontSize: 13, color: '#bbb', textAlign: 'center', paddingHorizontal: 20,
+  },
+  addBtn: {
+    marginTop: 12, paddingVertical: 12,
+    borderRadius: 10, borderWidth: 1.5, borderColor: '#3a7d44',
+    alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)',
+  },
+  addBtnText: { color: '#3a7d44', fontWeight: '600', fontSize: 14 },
+});
+
+// ── Main Layouts Screen ────────────────────────────────────────────────────────
+
+export default function LayoutsScreen() {
+  const { userId } = useAuth();
+  const router = useRouter();
+
+  const [layouts, setLayouts] = useState<GardenLayout[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [beds, setBeds] = useState<GardenBed[]>([]);
+  const [plantCounts, setPlantCounts] = useState<Record<number, number>>({});
+
+  const layoutsRef = useRef(layouts);
+  layoutsRef.current = layouts;
+
+  useEffect(() => {
+    if (userId) loadAll();
+  }, [userId]);
+
+  function loadAll() {
+    getOrCreateDefaultLayout(userId!);
+    const ls = getLayouts(userId!);
+    setLayouts(ls);
+    if (ls.length > 0 && expandedIds.size === 0) {
+      setExpandedIds(new Set([ls[0].id]));
+    }
+    const b = getGardenBeds(userId!);
+    setBeds(b);
+    const counts: Record<number, number> = {};
+    for (const bed of b) counts[bed.id] = getPlants(bed.id).length;
+    setPlantCounts(counts);
+  }
+
+  function toggleExpanded(id: number) {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function handleRename(id: number, name: string) {
+    renameLayout(id, name);
+    setLayouts(prev => prev.map(l => l.id === id ? { ...l, name } : l));
+  }
+
+  function handleDelete(id: number) {
+    deleteLayout(id);
+    setExpandedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+    const ls = getLayouts(userId!);
+    setLayouts(ls);
+  }
+
+  function handleAddLayout() {
+    const newLayout = createLayout(userId!, 'New Layout');
+    setLayouts(getLayouts(userId!));
+    setExpandedIds(prev => new Set([...prev, newLayout.id]));
+  }
+
+  function handleReorder(fromIdx: number, toIdx: number) {
+    setLayouts(prev => {
+      const arr = [...prev];
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      return arr;
+    });
+  }
+
+  function handleReorderEnd() {
+    reorderLayouts(layoutsRef.current.map((l, i) => ({ id: l.id, sort_order: i })));
+  }
+
+  return (
+    <GardenBackground style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageTitle}>My Layouts</Text>
+          <Pressable style={styles.addLayoutBtn} onPress={handleAddLayout}>
+            <Text style={styles.addLayoutTxt}>+ New Layout</Text>
+          </Pressable>
+        </View>
+
+        {layouts.length === 0 && (
+          <Text style={styles.empty}>No layouts yet.{'\n'}Tap "+ New Layout" to get started.</Text>
+        )}
+
+        {layouts.map((layout, index) => (
+          <LayoutCard
+            key={layout.id}
+            layout={layout}
+            isExpanded={expandedIds.has(layout.id)}
+            onToggle={() => toggleExpanded(layout.id)}
+            onRename={(name) => handleRename(layout.id, name)}
+            onDelete={() => handleDelete(layout.id)}
+            index={index}
+            total={layouts.length}
+            onReorder={handleReorder}
+            onReorderEnd={handleReorderEnd}
+            userId={userId!}
+            beds={beds}
+            plantCounts={plantCounts}
+            router={router}
+          />
+        ))}
+      </ScrollView>
     </GardenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  inner: {
-    flex: 1,
+  scroll: { padding: H_PAD, paddingBottom: 40, overflow: 'visible' },
+
+  pageHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 16,
-    paddingHorizontal: H_PAD,
-    paddingBottom: 20,
+    justifyContent: 'space-between',
+    marginBottom: 16,
   },
+  pageTitle: { fontSize: 26, fontWeight: '700', color: '#3a7d44' },
+  addLayoutBtn: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
+    backgroundColor: '#3a7d44',
+  },
+  addLayoutTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', width: '100%', marginBottom: 4,
+  empty: {
+    textAlign: 'center', color: '#888',
+    marginTop: 60, lineHeight: 24, fontSize: 16,
   },
-  title: { fontSize: 24, fontWeight: '700', color: '#3a7d44' },
-  canvasBtn: {
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.85)', borderWidth: 1, borderColor: '#ccc',
-  },
-  canvasBtnText: { fontSize: 13, color: '#555' },
-  canvasInfo: { fontSize: 12, color: '#555', marginBottom: 10, alignSelf: 'flex-start' },
-
-  canvas: {
-    backgroundColor: '#fff',
-    borderWidth: 1.5, borderColor: '#bbb',
-    borderRadius: 4, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12, shadowRadius: 6, elevation: 4,
-  },
-  canvasEmpty: {
-    position: 'absolute', top: '40%', left: 0, right: 0,
-    fontSize: 14, color: '#bbb', textAlign: 'center', paddingHorizontal: 20,
-  },
-
-  addBtn: {
-    marginTop: 14, paddingVertical: 13,
-    borderRadius: 10, borderWidth: 1.5, borderColor: '#3a7d44',
-    alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.85)',
-  },
-  addBtnText: { color: '#3a7d44', fontWeight: '600', fontSize: 15 },
 
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center' },
   overlayScroll: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 40 },
