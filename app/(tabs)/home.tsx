@@ -1,17 +1,24 @@
 import { useAuth } from '@/context/auth';
 import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
-import { addGardenBed, deleteGardenBed, GardenBed, getGardenBeds } from '@/lib/database';
+import { addGardenBed, deleteGardenBed, GardenBed, getGardenBeds, renameGardenBed } from '@/lib/database';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, FlatList, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 export default function HomeScreen() {
   const { userId, logout } = useAuth();
   const router = useRouter();
   const [beds, setBeds] = useState<GardenBed[]>([]);
-  const [modalVisible, setModalVisible] = useState(false);
+
+  // Add modal
+  const [addVisible, setAddVisible] = useState(false);
   const [newBedName, setNewBedName] = useState('');
+
+  // Rename modal
+  const [renameVisible, setRenameVisible] = useState(false);
+  const [renamingBed, setRenamingBed] = useState<GardenBed | null>(null);
+  const [renameText, setRenameText] = useState('');
 
   useFocusEffect(
     useCallback(() => {
@@ -24,21 +31,47 @@ export default function HomeScreen() {
     addGardenBed(userId, newBedName.trim());
     setBeds(getGardenBeds(userId));
     setNewBedName('');
-    setModalVisible(false);
+    setAddVisible(false);
   }
 
-  function handleDeleteBed(id: number) {
-    Alert.alert('Delete Bed', 'This will also remove all plants inside it. Continue?', [
-      { text: 'Cancel', style: 'cancel' },
+  function handleLongPress(bed: GardenBed) {
+    Alert.alert(bed.name, 'What would you like to do?', [
+      {
+        text: 'Edit Name',
+        onPress: () => {
+          setRenamingBed(bed);
+          setRenameText(bed.name);
+          setRenameVisible(true);
+        },
+      },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          deleteGardenBed(id);
-          if (userId) setBeds(getGardenBeds(userId));
+          Alert.alert('Delete Bed', 'This will also remove all plants inside it. Continue?', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => {
+                deleteGardenBed(bed.id);
+                if (userId) setBeds(getGardenBeds(userId));
+              },
+            },
+          ]);
         },
       },
+      { text: 'Cancel', style: 'cancel' },
     ]);
+  }
+
+  function handleRename() {
+    if (!renameText.trim() || !renamingBed) return;
+    renameGardenBed(renamingBed.id, renameText.trim());
+    if (userId) setBeds(getGardenBeds(userId));
+    setRenameVisible(false);
+    setRenamingBed(null);
+    setRenameText('');
   }
 
   async function handleLogout() {
@@ -55,6 +88,11 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
+      <Pressable style={[styles.bedCard, styles.layoutCard]} onPress={() => router.push('/layout')}>
+        <ThemedText style={styles.bedName}>My Layout</ThemedText>
+        <ThemedText style={styles.bedHint}>Visualize and arrange your garden space</ThemedText>
+      </Pressable>
+
       <FlatList
         data={beds}
         keyExtractor={(item) => String(item.id)}
@@ -68,19 +106,20 @@ export default function HomeScreen() {
           <Pressable
             style={styles.bedCard}
             onPress={() => router.push({ pathname: '/bed/[id]', params: { id: item.id } })}
-            onLongPress={() => handleDeleteBed(item.id)}
+            onLongPress={() => handleLongPress(item)}
           >
             <ThemedText style={styles.bedName}>{item.name}</ThemedText>
-            <ThemedText style={styles.bedHint}>Hold to delete</ThemedText>
+            <ThemedText style={styles.bedHint}>Hold to edit / delete</ThemedText>
           </Pressable>
         )}
       />
 
-      <Pressable style={styles.fab} onPress={() => setModalVisible(true)}>
+      <Pressable style={styles.fab} onPress={() => setAddVisible(true)}>
         <ThemedText style={styles.fabText}>+</ThemedText>
       </Pressable>
 
-      <Modal visible={modalVisible} transparent animationType="fade">
+      {/* Add bed modal */}
+      <Modal visible={addVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <ThemedText type="subtitle" style={styles.modalTitle}>New Garden Bed</ThemedText>
@@ -95,12 +134,41 @@ export default function HomeScreen() {
             <View style={styles.modalBtns}>
               <Pressable
                 style={styles.btnCancel}
-                onPress={() => { setModalVisible(false); setNewBedName(''); }}
+                onPress={() => { setAddVisible(false); setNewBedName(''); }}
               >
                 <ThemedText style={styles.btnCancelText}>Cancel</ThemedText>
               </Pressable>
               <Pressable style={styles.btnAdd} onPress={handleAddBed}>
                 <ThemedText style={styles.btnAddText}>Add</ThemedText>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rename bed modal */}
+      <Modal visible={renameVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitleDark}>Rename Bed</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="New name"
+              placeholderTextColor="#888"
+              value={renameText}
+              onChangeText={setRenameText}
+              autoFocus
+              selectTextOnFocus
+            />
+            <View style={styles.modalBtns}>
+              <Pressable
+                style={styles.btnCancel}
+                onPress={() => { setRenameVisible(false); setRenamingBed(null); setRenameText(''); }}
+              >
+                <Text style={styles.btnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.btnAdd} onPress={handleRename}>
+                <Text style={styles.btnAddText}>Save</Text>
               </Pressable>
             </View>
           </View>
@@ -137,6 +205,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#c8e6c9',
   },
+  layoutCard: { borderColor: '#3a7d44', borderWidth: 1.5 },
   bedName: { fontSize: 18, fontWeight: '600', color: '#2e5c35' },
   bedHint: { fontSize: 12, color: '#888', marginTop: 4 },
   fab: {
@@ -162,12 +231,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  modal: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-  },
+  modal: { backgroundColor: '#fff', borderRadius: 16, padding: 24 },
   modalTitle: { marginBottom: 16, fontSize: 18 },
+  modalTitleDark: { fontSize: 18, fontWeight: '700', color: '#11181C', marginBottom: 16 },
   input: {
     borderWidth: 1,
     borderColor: '#ccc',
