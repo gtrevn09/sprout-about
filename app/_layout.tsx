@@ -56,7 +56,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="bed/[id]" options={{ title: 'Garden Bed' }} />
           <Stack.Screen name="plant/[id]" options={{ title: 'Plant Details' }} />
-          <Stack.Screen name="layout" options={{ title: 'My Layout' }} />
+          <Stack.Screen name="layout" options={{ title: 'My Layouts' }} />
         </Stack>
         <NotificationHandler />
         <StatusBar style="auto" />
