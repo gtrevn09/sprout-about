@@ -26,16 +26,15 @@ export function DateTimePickerInput({ value, onChange, mode, placeholder }: Prop
     : placeholder ?? (mode === 'date' ? 'Select date…' : 'Select time…');
 
   function handleOpen() {
-    if (value) {
-      setTempDate(value);
-    } else {
-      // Default to yesterday so tapping today always fires a change event
-      // (onChange won't fire if the picker's current value already equals the tapped date)
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      setTempDate(yesterday);
-    }
+    const base = value ?? new Date();
+    setTempDate(new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0));
     setShow(true);
+  }
+
+  function handleSelectToday() {
+    const today = new Date();
+    onChange(new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+    setShow(false);
   }
 
   function handleChange(_event: DateTimePickerEvent, date?: Date) {
@@ -43,13 +42,14 @@ export function DateTimePickerInput({ value, onChange, mode, placeholder }: Prop
       setShow(false);
       if (_event.type === 'set' && date) onChange(date);
     } else if (mode === 'date') {
-      // Tap a date → auto-confirm and close; no Done button needed
+      // Tap any day → auto-confirm and close. Today won't fire this (iOS limitation),
+      // so users tap the "Today" button in the toolbar instead.
       if (date) {
-        onChange(date);
+        onChange(new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0));
         setShow(false);
       }
     } else {
-      // Time: user scrolls then presses Done
+      // Time: scroll to pick, then press Done
       if (date) setTempDate(date);
     }
   }
@@ -77,12 +77,14 @@ export function DateTimePickerInput({ value, onChange, mode, placeholder }: Prop
                 <Text style={styles.iosTitle}>
                   {mode === 'date' ? 'Select Date' : 'Select Time'}
                 </Text>
-                {mode === 'time' ? (
+                {mode === 'date' ? (
+                  <Pressable onPress={handleSelectToday} style={styles.iosTodayBtn}>
+                    <Text style={styles.iosTodayText}>Today</Text>
+                  </Pressable>
+                ) : (
                   <Pressable onPress={handleDone} style={styles.iosDoneBtn}>
                     <Text style={styles.iosDoneText}>Done</Text>
                   </Pressable>
-                ) : (
-                  <View style={styles.iosDoneBtn} />
                 )}
               </View>
               <DateTimePicker
@@ -155,5 +157,14 @@ const styles = StyleSheet.create({
   iosCancelText: { fontSize: 16, color: '#888' },
   iosDoneBtn: { padding: 4, minWidth: 60, alignItems: 'flex-end' },
   iosDoneText: { fontSize: 16, color: '#3a7d44', fontWeight: '700' },
+  iosTodayBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#3a7d44',
+    backgroundColor: '#eaf4eb',
+  },
+  iosTodayText: { fontSize: 15, color: '#3a7d44', fontWeight: '700' },
   picker: { alignSelf: 'center' },
 });
