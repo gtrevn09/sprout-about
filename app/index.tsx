@@ -21,28 +21,18 @@ export default function LandingScreen() {
 
   return (
     <ImageBackground
-      source={require('@/assets/images/sprout-about.png')}
+      source={require('@/assets/images/Cover_Photo.png')}
       style={styles.background}
       resizeMode="cover"
     >
       <View style={styles.overlay}>
-        <View style={styles.content}>
-          <ThemedText type="title" style={styles.title}>Sprout About</ThemedText>
-          <ThemedText type="subtitle" style={styles.tagline}>
-            Track and nurture your garden's growth.
-          </ThemedText>
-          <ThemedText style={styles.about}>
-            Organize your garden beds, log each plant's progress with photos, and never miss a fertilizing schedule — all stored privately on your device.
-          </ThemedText>
-
-          <View style={styles.buttons}>
-            <Pressable style={styles.btnPrimary} onPress={() => router.push('/login')}>
-              <ThemedText style={styles.btnPrimaryText}>Log In</ThemedText>
-            </Pressable>
-            <Pressable style={styles.btnSecondary} onPress={() => router.push('/register')}>
-              <ThemedText style={styles.btnSecondaryText}>Sign Up</ThemedText>
-            </Pressable>
-          </View>
+        <View style={styles.buttons}>
+          <Pressable style={styles.btnPrimary} onPress={() => router.push('/login')}>
+            <ThemedText style={styles.btnPrimaryText}>Log In</ThemedText>
+          </Pressable>
+          <Pressable style={styles.btnSecondary} onPress={() => router.push('/register')}>
+            <ThemedText style={styles.btnSecondaryText}>Sign Up</ThemedText>
+          </Pressable>
         </View>
       </View>
     </ImageBackground>
@@ -53,31 +43,9 @@ const styles = StyleSheet.create({
   background: { flex: 1 },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.50)',
     justifyContent: 'flex-end',
     paddingBottom: 80,
-  },
-  content: {
-    alignItems: 'center',
     paddingHorizontal: 32,
-  },
-  title: {
-    color: '#fff',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  tagline: {
-    color: '#d4edda',
-    textAlign: 'center',
-    marginBottom: 14,
-    fontWeight: '400',
-  },
-  about: {
-    color: 'rgba(255,255,255,0.80)',
-    textAlign: 'center',
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 40,
   },
   buttons: {
     width: '100%',

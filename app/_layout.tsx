@@ -4,6 +4,7 @@ import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -45,6 +46,7 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <AuthProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
@@ -54,10 +56,12 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="bed/[id]" options={{ title: 'Garden Bed' }} />
           <Stack.Screen name="plant/[id]" options={{ title: 'Plant Details' }} />
+          <Stack.Screen name="layout" options={{ title: 'My Layout' }} />
         </Stack>
         <NotificationHandler />
         <StatusBar style="auto" />
       </ThemeProvider>
     </AuthProvider>
+    </GestureHandlerRootView>
   );
 }

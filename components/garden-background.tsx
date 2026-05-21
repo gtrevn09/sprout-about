@@ -12,7 +12,7 @@ const overlays: Record<Variant, string> = {
 export function GardenBackground({ variant = 'app', style, children, ...rest }: Props) {
   return (
     <ImageBackground
-      source={require('@/assets/images/sprout-about.png')}
+      source={require('@/assets/images/General_Background.png')}
       style={styles.bg}
       resizeMode="cover"
     >

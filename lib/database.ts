@@ -52,10 +52,30 @@ export function initDatabase() {
       repeat_days INTEGER,
       notification_time TEXT
     );
+    CREATE TABLE IF NOT EXISTS garden_layout (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE,
+      canvas_width_ft REAL DEFAULT 20,
+      canvas_height_ft REAL DEFAULT 15
+    );
+    CREATE TABLE IF NOT EXISTS layout_shapes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      bed_id INTEGER,
+      shape_type TEXT NOT NULL DEFAULT 'rectangle',
+      x REAL NOT NULL DEFAULT 0,
+      y REAL NOT NULL DEFAULT 0,
+      width_ft REAL NOT NULL DEFAULT 4,
+      height_ft REAL NOT NULL DEFAULT 4,
+      label TEXT,
+      color TEXT DEFAULT '#c8e6c9',
+      rotation REAL DEFAULT 0
+    );
   `);
   // Migrate existing installs that predate the repeat columns
   try { db.execSync('ALTER TABLE plant_schedules ADD COLUMN repeat_days INTEGER;'); } catch {}
   try { db.execSync('ALTER TABLE plant_schedules ADD COLUMN notification_time TEXT;'); } catch {}
+  try { db.execSync('ALTER TABLE layout_shapes ADD COLUMN rotation REAL DEFAULT 0;'); } catch {}
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -116,6 +136,10 @@ export function getGardenBed(id: number): GardenBed | null {
 
 export function addGardenBed(userId: number, name: string): void {
   db.runSync('INSERT INTO garden_beds (user_id, name) VALUES (?, ?);', userId, name);
+}
+
+export function renameGardenBed(id: number, name: string): void {
+  db.runSync('UPDATE garden_beds SET name = ? WHERE id = ?;', name, id);
 }
 
 export function deleteGardenBed(id: number): void {
@@ -288,4 +312,93 @@ export function upsertPlantSchedule(
 
 export function clearPlantSchedule(plantId: number): void {
   db.runSync('DELETE FROM plant_schedules WHERE plant_id = ?;', plantId);
+}
+
+// Garden Layout
+
+export type GardenLayout = {
+  id: number;
+  user_id: number;
+  canvas_width_ft: number;
+  canvas_height_ft: number;
+};
+
+export type LayoutShape = {
+  id: number;
+  user_id: number;
+  bed_id: number | null;
+  shape_type: 'rectangle' | 'circle';
+  x: number;
+  y: number;
+  width_ft: number;
+  height_ft: number;
+  label: string | null;
+  color: string;
+  rotation: number;
+};
+
+export function getOrCreateLayout(userId: number): GardenLayout {
+  let layout = db.getFirstSync<GardenLayout>(
+    'SELECT * FROM garden_layout WHERE user_id = ?;', userId
+  );
+  if (!layout) {
+    db.runSync(
+      'INSERT INTO garden_layout (user_id, canvas_width_ft, canvas_height_ft) VALUES (?, 20, 15);',
+      userId
+    );
+    layout = db.getFirstSync<GardenLayout>(
+      'SELECT * FROM garden_layout WHERE user_id = ?;', userId
+    )!;
+  }
+  return layout;
+}
+
+export function updateLayoutCanvas(userId: number, widthFt: number, heightFt: number): void {
+  db.runSync(
+    'UPDATE garden_layout SET canvas_width_ft = ?, canvas_height_ft = ? WHERE user_id = ?;',
+    widthFt, heightFt, userId
+  );
+}
+
+export function getLayoutShapes(userId: number): LayoutShape[] {
+  return db.getAllSync<LayoutShape>(
+    'SELECT * FROM layout_shapes WHERE user_id = ? ORDER BY id ASC;', userId
+  );
+}
+
+export function addLayoutShape(
+  userId: number,
+  shapeType: 'rectangle' | 'circle',
+  x: number, y: number,
+  widthFt: number, heightFt: number,
+  label: string | null,
+  color: string
+): void {
+  db.runSync(
+    `INSERT INTO layout_shapes (user_id, shape_type, x, y, width_ft, height_ft, label, color)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+    userId, shapeType, x, y, widthFt, heightFt, label, color
+  );
+}
+
+export function updateLayoutShape(
+  id: number,
+  label: string | null,
+  widthFt: number,
+  heightFt: number,
+  color: string,
+  bedId: number | null
+): void {
+  db.runSync(
+    'UPDATE layout_shapes SET label = ?, width_ft = ?, height_ft = ?, color = ?, bed_id = ? WHERE id = ?;',
+    label, widthFt, heightFt, color, bedId, id
+  );
+}
+
+export function updateShapeTransform(id: number, x: number, y: number, rotation: number): void {
+  db.runSync('UPDATE layout_shapes SET x = ?, y = ?, rotation = ? WHERE id = ?;', x, y, rotation, id);
+}
+
+export function deleteLayoutShape(id: number): void {
+  db.runSync('DELETE FROM layout_shapes WHERE id = ?;', id);
 }
