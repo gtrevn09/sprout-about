@@ -551,6 +551,14 @@ function LayoutCard({
       isDragging && lc.cardLifted,
       { transform: [{ translateY: dragY }] },
     ]}>
+      {/* ── Wood plank top ── */}
+      <View style={lc.plankTop}>
+        <View style={lc.woodKnot} />
+        <View style={[lc.woodGrain, { left: '28%' }]} />
+        <View style={[lc.woodGrain, { left: '60%' }]} />
+        <View style={[lc.woodGrain, { left: '82%' }]} />
+      </View>
+
       {/* ── Card Header ── */}
       <View style={lc.header}>
         <GestureDetector gesture={dragGesture}>
@@ -646,6 +654,13 @@ function LayoutCard({
           </Pressable>
         </View>
       )}
+
+      {/* ── Wood plank bottom ── */}
+      <View style={lc.plankBottom}>
+        <View style={[lc.woodGrain, { left: '15%' }]} />
+        <View style={[lc.woodGrain, { left: '50%' }]} />
+        <View style={[lc.woodGrain, { left: '75%' }]} />
+      </View>
 
       {/* ── Add Shape Modal ── */}
       <Modal visible={addVisible} transparent animationType="fade">
@@ -854,25 +869,59 @@ function LayoutCard({
 
 const lc = StyleSheet.create({
   card: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
+    backgroundColor: '#FEFAF4',
+    borderRadius: 12,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#dde8dd',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 3,
+    borderColor: '#8B5A2B',
+    shadowColor: '#2d1200',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 6,
     zIndex: 1,
+    overflow: 'hidden',
   },
   cardLifted: {
     zIndex: 999,
     elevation: 16,
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.45,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
-    borderColor: '#3a7d44',
+    borderColor: '#5C3010',
+  },
+  plankTop: {
+    height: 16,
+    backgroundColor: '#8B5A2B',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#5C3010',
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  plankBottom: {
+    height: 11,
+    backgroundColor: '#7A4F22',
+    borderTopWidth: 1,
+    borderTopColor: '#5C3010',
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  woodGrain: {
+    position: 'absolute',
+    width: '15%',
+    height: 1.5,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    borderRadius: 2,
+  },
+  woodKnot: {
+    position: 'absolute',
+    left: '8%',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(0,0,0,0.22)',
   },
   header: {
     flexDirection: 'row',
@@ -880,6 +929,7 @@ const lc = StyleSheet.create({
     height: CARD_HEADER_H,
     paddingHorizontal: 8,
     gap: 2,
+    backgroundColor: '#FEFAF4',
   },
   dragHandle: {
     width: 36,
@@ -887,22 +937,22 @@ const lc = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dragIcon: { fontSize: 20, color: '#aaa', lineHeight: 22 },
+  dragIcon: { fontSize: 20, color: '#9B7040', lineHeight: 22 },
   titleArea: { flex: 1, paddingHorizontal: 4 },
-  title: { fontSize: 17, fontWeight: '700', color: '#2e5c35' },
+  title: { fontSize: 17, fontWeight: '700', color: '#5C3010' },
   renameInput: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#2e5c35',
+    color: '#5C3010',
     borderBottomWidth: 1.5,
-    borderBottomColor: '#3a7d44',
+    borderBottomColor: '#8B5A2B',
     paddingVertical: 2,
   },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  iconTxt: { fontSize: 16, color: '#3a7d44' },
+  iconTxt: { fontSize: 16, color: '#8B5A2B' },
   chevronBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  chevron: { fontSize: 13, color: '#888' },
-  body: { paddingHorizontal: 14, paddingBottom: 16, alignItems: 'center' },
+  chevron: { fontSize: 13, color: '#9B7040' },
+  body: { paddingHorizontal: 14, paddingBottom: 16, alignItems: 'center', backgroundColor: '#FEFAF4' },
   canvasRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -910,19 +960,19 @@ const lc = StyleSheet.create({
     width: '100%',
     marginBottom: 8,
   },
-  canvasInfo: { fontSize: 11, color: '#777', flex: 1 },
+  canvasInfo: { fontSize: 11, color: '#8B6540', flex: 1 },
   canvasBtn: {
     paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: 7, backgroundColor: '#f5f5f5',
-    borderWidth: 1, borderColor: '#ddd',
+    borderRadius: 7, backgroundColor: '#f5ede0',
+    borderWidth: 1, borderColor: '#C8956C',
   },
-  canvasBtnText: { fontSize: 12, color: '#555' },
+  canvasBtnText: { fontSize: 12, color: '#7A4F22' },
   canvas: {
-    backgroundColor: '#fff',
-    borderWidth: 1.5, borderColor: '#bbb',
+    backgroundColor: '#e8f5e9',
+    borderWidth: 2, borderColor: '#6B8B5A',
     borderRadius: 4, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
+    shadowColor: '#1a4a22', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15, shadowRadius: 4, elevation: 3,
   },
   canvasEmpty: {
     position: 'absolute', top: '40%', left: 0, right: 0,
@@ -930,20 +980,23 @@ const lc = StyleSheet.create({
   },
   addBtn: {
     marginTop: 12, paddingVertical: 12,
-    borderRadius: 10, borderWidth: 1.5, borderColor: '#3a7d44',
-    alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 10, borderWidth: 1.5, borderColor: '#8B5A2B',
+    alignItems: 'center', backgroundColor: 'rgba(254,250,244,0.95)',
   },
-  addBtnText: { color: '#3a7d44', fontWeight: '600', fontSize: 14 },
+  addBtnText: { color: '#7A4F22', fontWeight: '600', fontSize: 14 },
 });
 
 // ── Main Layouts Screen ────────────────────────────────────────────────────────
+
+// Persists across screen unmount/remount within the same app session
+let savedExpandedIds: Set<number> | null = null;
 
 export default function LayoutsScreen() {
   const { userId } = useAuth();
   const router = useRouter();
 
   const [layouts, setLayouts] = useState<GardenLayout[]>([]);
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => savedExpandedIds ?? new Set());
   const [beds, setBeds] = useState<GardenBed[]>([]);
   const [plantCounts, setPlantCounts] = useState<Record<number, number>>({});
 
@@ -954,11 +1007,15 @@ export default function LayoutsScreen() {
     if (userId) loadAll();
   }, [userId]);
 
+  useEffect(() => {
+    savedExpandedIds = expandedIds;
+  }, [expandedIds]);
+
   function loadAll() {
     getOrCreateDefaultLayout(userId!);
     const ls = getLayouts(userId!);
     setLayouts(ls);
-    if (ls.length > 0 && expandedIds.size === 0) {
+    if (ls.length > 0 && savedExpandedIds === null) {
       setExpandedIds(new Set([ls[0].id]));
     }
     const b = getGardenBeds(userId!);
@@ -1000,12 +1057,13 @@ export default function LayoutsScreen() {
       const arr = [...prev];
       const [moved] = arr.splice(fromIdx, 1);
       arr.splice(toIdx, 0, moved);
+      reorderLayouts(arr.map((l, i) => ({ id: l.id, sort_order: i })));
       return arr;
     });
   }
 
   function handleReorderEnd() {
-    reorderLayouts(layoutsRef.current.map((l, i) => ({ id: l.id, sort_order: i })));
+    // DB is saved inside handleReorder's setLayouts updater
   }
 
   return (
