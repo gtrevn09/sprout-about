@@ -1,6 +1,7 @@
 import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
 import { EmojiPicker } from '@/components/emoji-picker';
+import { Fonts } from '@/constants/theme';
 import { addPlant, deletePlant, GardenBed, getGardenBed, getPlants, Plant } from '@/lib/database';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -62,7 +63,15 @@ export default function BedDetailScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           plants.length > 0 ? (
-            <ThemedText style={styles.hint}>Tap a plant to view details. Hold to remove.</ThemedText>
+            <View style={styles.listHeader}>
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerLeaf}>🌿</Text>
+                <View style={styles.dividerLine} />
+              </View>
+              <Text style={styles.listTitle}>What's Growing</Text>
+              <Text style={styles.hint}>Tap to view · Hold to remove</Text>
+            </View>
           ) : null
         }
         ListEmptyComponent={
@@ -258,7 +267,29 @@ const pc = StyleSheet.create({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   list: { padding: 20, paddingBottom: 100 },
-  hint: { color: '#888', fontSize: 13, marginBottom: 12 },
+  listHeader: { alignItems: 'center', marginBottom: 20 },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 10,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#a5d6a7',
+  },
+  dividerLeaf: { fontSize: 18, marginHorizontal: 10 },
+  listTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#2e5c35',
+    fontFamily: Fonts?.rounded ?? undefined,
+    letterSpacing: 0.5,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  hint: { color: '#999', fontSize: 12, textAlign: 'center' },
   empty: {
     textAlign: 'center',
     color: '#888',

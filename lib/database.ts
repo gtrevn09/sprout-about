@@ -9,7 +9,15 @@ export function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
+      email TEXT,
       created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS garden_beds (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +110,7 @@ export function initDatabase() {
   try { db.execSync('ALTER TABLE plants ADD COLUMN quantity INTEGER DEFAULT 1;'); } catch {}
   try { db.execSync('ALTER TABLE layout_shapes ADD COLUMN layout_id INTEGER;'); } catch {}
   try { db.execSync('ALTER TABLE plants ADD COLUMN emoji TEXT;'); } catch {}
+  try { db.execSync('ALTER TABLE users ADD COLUMN email TEXT;'); } catch {}
   // Copy existing single layout into garden_layouts if not already done
   const existingLayouts = db.getFirstSync<{ cnt: number }>('SELECT COUNT(*) as cnt FROM garden_layouts;');
   if (!existingLayouts || existingLayouts.cnt === 0) {
@@ -130,11 +139,22 @@ async function hashPassword(password: string): Promise<string> {
 
 export async function registerUser(
   username: string,
-  password: string
+  password: string,
+  email?: string
 ): Promise<{ success: boolean; userId?: number; error?: string }> {
   try {
+    const normalizedEmail = email ? email.toLowerCase().trim() : null;
+    if (normalizedEmail) {
+      const existing = db.getFirstSync<{ id: number }>(
+        'SELECT id FROM users WHERE email = ?;', normalizedEmail
+      );
+      if (existing) return { success: false, error: 'That email is already registered.' };
+    }
     const hash = await hashPassword(password);
-    db.runSync('INSERT INTO users (username, password_hash) VALUES (?, ?);', username, hash);
+    db.runSync(
+      'INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?);',
+      username, hash, normalizedEmail
+    );
     const user = db.getFirstSync<{ id: number }>('SELECT id FROM users WHERE username = ?;', username);
     return { success: true, userId: user?.id };
   } catch (e: any) {
@@ -163,6 +183,51 @@ export async function loginUser(
   } catch {
     return { success: false, error: 'Something went wrong. Please try again.' };
   }
+}
+
+// Password Reset
+
+export function getUserEmail(userId: number): string | null {
+  return db.getFirstSync<{ email: string | null }>(
+    'SELECT email FROM users WHERE id = ?;', userId
+  )?.email ?? null;
+}
+
+export function setUserEmail(userId: number, email: string): void {
+  db.runSync('UPDATE users SET email = ? WHERE id = ?;', email.toLowerCase().trim(), userId);
+}
+
+export function getUserByEmail(email: string): { id: number; username: string } | null {
+  return db.getFirstSync<{ id: number; username: string }>(
+    'SELECT id, username FROM users WHERE email = ?;',
+    email.toLowerCase().trim()
+  ) ?? null;
+}
+
+export function createPasswordResetToken(userId: number, token: string, expiresAt: string): void {
+  db.runSync('UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0;', userId);
+  db.runSync(
+    'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?);',
+    userId, token, expiresAt
+  );
+}
+
+export function validateResetToken(userId: number, token: string): number | null {
+  const now = new Date().toISOString();
+  const row = db.getFirstSync<{ id: number }>(
+    'SELECT id FROM password_reset_tokens WHERE user_id = ? AND token = ? AND expires_at > ? AND used = 0;',
+    userId, token, now
+  );
+  return row?.id ?? null;
+}
+
+export function markResetTokenUsed(tokenId: number): void {
+  db.runSync('UPDATE password_reset_tokens SET used = 1 WHERE id = ?;', tokenId);
+}
+
+export async function updateUserPassword(userId: number, newPassword: string): Promise<void> {
+  const hash = await hashPassword(newPassword);
+  db.runSync('UPDATE users SET password_hash = ? WHERE id = ?;', hash, userId);
 }
 
 // Garden Beds
