@@ -33,7 +33,7 @@ import {
   upsertPlantSchedule,
   upsertTreatmentSchedule,
 } from '@/lib/database';
-import { scheduleFertilizerReminder, scheduleTreatmentReminder } from '@/lib/notifications';
+import { cancelNotification, scheduleFertilizerReminder, scheduleTreatmentReminder } from '@/lib/notifications';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
@@ -86,6 +86,10 @@ function formatScheduledDate(dateStr: string): string {
 
 function timeStringFromDate(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function toLocalDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export default function PlantDetailScreen() {
@@ -298,7 +302,7 @@ export default function PlantDetailScreen() {
       return;
     }
     const date = fertDate ?? todayStart();
-    addFertilizerLog(plantId, fertType.trim(), date.toISOString().slice(0, 10), fertNotes.trim() || null);
+    addFertilizerLog(plantId, fertType.trim(), toLocalDateStr(date), fertNotes.trim() || null);
     setFertLogs(getFertilizerLogs(plantId));
     setFertType(''); setFertDate(null); setFertNotes('');
     setFertModalVisible(false);
@@ -308,6 +312,7 @@ export default function PlantDetailScreen() {
     if (sched?.repeat_days) {
       autoReschedule(sched.repeat_days, sched.notification_time ?? '09:00');
     } else {
+      if (sched?.notification_id) cancelNotification(sched.notification_id);
       clearPlantSchedule(plantId);
       setNextScheduledDate(null);
     }
@@ -335,7 +340,7 @@ export default function PlantDetailScreen() {
       return;
     }
     const date = editFertDate ?? todayStart();
-    updateFertilizerLog(editingLog.id, editFertType.trim(), date.toISOString().slice(0, 10), editFertNotes.trim() || null);
+    updateFertilizerLog(editingLog.id, editFertType.trim(), toLocalDateStr(date), editFertNotes.trim() || null);
     setFertLogs(getFertilizerLogs(plantId));
     setEditingLog(null);
   }
@@ -354,7 +359,7 @@ export default function PlantDetailScreen() {
       return;
     }
     const date = treatDate ?? todayStart();
-    addTreatmentLog(plantId, treatType.trim(), date.toISOString().slice(0, 10), treatNotes.trim() || null);
+    addTreatmentLog(plantId, treatType.trim(), toLocalDateStr(date), treatNotes.trim() || null);
     setTreatLogs(getTreatmentLogs(plantId));
     setTreatType(''); setTreatDate(null); setTreatNotes('');
     setTreatModalVisible(false);
@@ -363,6 +368,7 @@ export default function PlantDetailScreen() {
     if (tsched?.repeat_days) {
       autoRescheduleTreat(tsched.repeat_days, tsched.notification_time ?? '09:00');
     } else {
+      if (tsched?.notification_id) cancelNotification(tsched.notification_id);
       clearTreatmentSchedule(plantId);
       setNextTreatDate(null);
     }
@@ -390,7 +396,7 @@ export default function PlantDetailScreen() {
       return;
     }
     const date = editTreatDate ?? todayStart();
-    updateTreatmentLog(editingTreatLog.id, editTreatType.trim(), date.toISOString().slice(0, 10), editTreatNotes.trim() || null);
+    updateTreatmentLog(editingTreatLog.id, editTreatType.trim(), toLocalDateStr(date), editTreatNotes.trim() || null);
     setTreatLogs(getTreatmentLogs(plantId));
     setEditingTreatLog(null);
   }
@@ -402,7 +408,7 @@ export default function PlantDetailScreen() {
     nextDate.setDate(nextDate.getDate() + repeatDays);
     nextDate.setHours(h ?? 9, m ?? 0, 0, 0);
     const notifId = await scheduleTreatmentReminder(name || plant?.name || 'plant', plantId, nextDate);
-    const scheduledStr = nextDate.toISOString().slice(0, 10);
+    const scheduledStr = toLocalDateStr(nextDate);
     upsertTreatmentSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
     setNextTreatDate(scheduledStr);
     setTreatRepeatDays(repeatDays);
@@ -427,9 +433,14 @@ export default function PlantDetailScreen() {
       Alert.alert('Invalid repeat', 'Please enter a valid number of days.');
       return;
     }
+    // Cancel the existing pending notification before scheduling a new one
+    const existingTreat = getTreatmentSchedule(plantId);
+    if (existingTreat?.notification_id) {
+      await cancelNotification(existingTreat.notification_id);
+    }
     const notifTime = timeStringFromDate(treatAlertTime);
     const notifId = await scheduleTreatmentReminder(name || plant?.name || 'plant', plantId, combined);
-    const scheduledStr = treatAlertDate.toISOString().slice(0, 10);
+    const scheduledStr = toLocalDateStr(treatAlertDate);
     upsertTreatmentSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
     setNextTreatDate(scheduledStr);
     setTreatRepeatDays(repeatDays);
@@ -458,7 +469,7 @@ export default function PlantDetailScreen() {
     nextDate.setDate(nextDate.getDate() + repeatDays);
     nextDate.setHours(h ?? 9, m ?? 0, 0, 0);
     const notifId = await scheduleFertilizerReminder(name || plant?.name || 'plant', plantId, nextDate);
-    const scheduledStr = nextDate.toISOString().slice(0, 10);
+    const scheduledStr = toLocalDateStr(nextDate);
     upsertPlantSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
     setNextScheduledDate(scheduledStr);
     setScheduleRepeatDays(repeatDays);
@@ -479,12 +490,13 @@ export default function PlantDetailScreen() {
   }
 
   function handleConfirmNo() {
-    addFertilizerLog(plantId, MISSED_FERTILIZER_TYPE, new Date().toISOString().slice(0, 10), null);
+    addFertilizerLog(plantId, MISSED_FERTILIZER_TYPE, toLocalDateStr(new Date()), null);
     setFertLogs(getFertilizerLogs(plantId));
     const sched = getPlantSchedule(plantId);
     if (sched?.repeat_days) {
       autoReschedule(sched.repeat_days, sched.notification_time ?? '09:00');
     } else {
+      if (sched?.notification_id) cancelNotification(sched.notification_id);
       clearPlantSchedule(plantId);
       setNextScheduledDate(null);
     }
@@ -510,9 +522,14 @@ export default function PlantDetailScreen() {
       Alert.alert('Invalid repeat', 'Please enter a valid number of days.');
       return;
     }
+    // Cancel the existing pending notification before scheduling a new one
+    const existingSched = getPlantSchedule(plantId);
+    if (existingSched?.notification_id) {
+      await cancelNotification(existingSched.notification_id);
+    }
     const notifTime = timeStringFromDate(alertTime);
     const notifId = await scheduleFertilizerReminder(name || plant?.name || 'plant', plantId, combined);
-    const scheduledStr = alertDate.toISOString().slice(0, 10);
+    const scheduledStr = toLocalDateStr(alertDate);
     upsertPlantSchedule(plantId, scheduledStr, notifId, repeatDays, notifTime);
     setNextScheduledDate(scheduledStr);
     setScheduleRepeatDays(repeatDays);
