@@ -53,6 +53,8 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="login" options={{ title: 'Log In' }} />
           <Stack.Screen name="register" options={{ title: 'Sign Up' }} />
+          <Stack.Screen name="forgot-password" options={{ title: 'Forgot Password' }} />
+          <Stack.Screen name="reset-password" options={{ title: 'Reset Password' }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="bed/[id]" options={{ title: 'Garden Bed' }} />
           <Stack.Screen name="plant/[id]" options={{ title: 'Plant Details' }} />

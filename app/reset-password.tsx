@@ -1,33 +1,26 @@
-import { useAuth } from '@/context/auth';
 import { GardenBackground } from '@/components/garden-background';
 import { ThemedText } from '@/components/themed-text';
-import { useRouter } from 'expo-router';
+import { markResetTokenUsed, updateUserPassword, validateResetToken } from '@/lib/database';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
-import { registerUser } from '../lib/database';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
 
-export default function RegisterScreen() {
+export default function ResetPasswordScreen() {
   const router = useRouter();
-  const { login } = useAuth();
-  const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
+  const { userId } = useLocalSearchParams<{ userId: string }>();
+  const userIdNum = Number(userId);
+
+  const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function handleRegister() {
+  async function handleReset() {
     setError('');
-    if (!username.trim()) {
-      setError('Please enter a username.');
-      return;
-    }
-    if (username.trim().length < 3) {
-      setError('Username must be at least 3 characters.');
-      return;
-    }
-    if (!email.trim() || !email.includes('@')) {
-      setError('Please enter a valid email address.');
+
+    if (code.trim().length !== 6) {
+      setError('Please enter the 6-digit code from your email.');
       return;
     }
     if (password.length < 6) {
@@ -38,15 +31,27 @@ export default function RegisterScreen() {
       setError('Passwords do not match.');
       return;
     }
-    setLoading(true);
-    const result = await registerUser(username.trim(), password, email.trim());
-    setLoading(false);
-    if (result.success && result.userId) {
-      await login(result.userId);
-      router.replace('/(tabs)/home');
-    } else {
-      setError(result.error ?? 'Registration failed.');
+
+    if (!userIdNum) {
+      setError('Invalid reset link. Please request a new code.');
+      return;
     }
+
+    setLoading(true);
+    const tokenId = validateResetToken(userIdNum, code.trim());
+    if (!tokenId) {
+      setLoading(false);
+      setError('Invalid or expired code. Please request a new one.');
+      return;
+    }
+
+    await updateUserPassword(userIdNum, password);
+    markResetTokenUsed(tokenId);
+    setLoading(false);
+
+    Alert.alert('Password reset!', 'Your password has been updated. Please log in.', [
+      { text: 'Log In', onPress: () => router.replace('/login') },
+    ]);
   }
 
   return (
@@ -55,30 +60,24 @@ export default function RegisterScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.inner}
       >
-        <ThemedText type="title" style={[styles.heading, styles.headingGreen]}>Create account</ThemedText>
-        <ThemedText style={styles.sub}>Start tracking your garden with Sprout About.</ThemedText>
+        <ThemedText style={styles.icon}>🌱</ThemedText>
+        <ThemedText type="title" style={styles.heading}>Reset password</ThemedText>
+        <ThemedText style={styles.sub}>
+          Enter the 6-digit code we emailed you, then choose a new password.
+        </ThemedText>
 
         <TextInput
           style={styles.input}
-          placeholder="Username"
+          placeholder="6-digit code"
           placeholderTextColor="#888"
-          autoCapitalize="none"
-          value={username}
-          onChangeText={setUsername}
+          keyboardType="number-pad"
+          maxLength={6}
+          value={code}
+          onChangeText={setCode}
         />
         <TextInput
           style={styles.input}
-          placeholder="Email address"
-          placeholderTextColor="#888"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
+          placeholder="New password"
           placeholderTextColor="#888"
           secureTextEntry
           value={password}
@@ -86,7 +85,7 @@ export default function RegisterScreen() {
         />
         <TextInput
           style={styles.input}
-          placeholder="Confirm password"
+          placeholder="Confirm new password"
           placeholderTextColor="#888"
           secureTextEntry
           value={confirm}
@@ -95,14 +94,17 @@ export default function RegisterScreen() {
 
         {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
 
-        <Pressable style={styles.btnPrimary} onPress={handleRegister} disabled={loading}>
+        <Pressable style={styles.btnPrimary} onPress={handleReset} disabled={loading}>
           <ThemedText style={styles.btnPrimaryText}>
-            {loading ? 'Creating account…' : 'Sign Up'}
+            {loading ? 'Resetting…' : 'Reset Password'}
           </ThemedText>
         </Pressable>
 
-        <Pressable onPress={() => router.push('/login')} style={styles.linkRow}>
-          <ThemedText style={styles.link}>Already have an account? Log in</ThemedText>
+        <Pressable
+          onPress={() => router.replace('/forgot-password')}
+          style={styles.linkRow}
+        >
+          <ThemedText style={styles.link}>Didn't get a code? Send again</ThemedText>
         </Pressable>
       </KeyboardAvoidingView>
     </GardenBackground>
@@ -117,9 +119,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingBottom: 40,
   },
-  heading: { marginBottom: 6 },
-  headingGreen: { color: '#3a7d44' },
-  sub: { color: '#666', marginBottom: 32 },
+  icon: { fontSize: 44, lineHeight: 56, textAlign: 'center', marginBottom: 12 },
+  heading: { color: '#3a7d44', marginBottom: 8, textAlign: 'center' },
+  sub: { color: '#666', marginBottom: 28, textAlign: 'center', lineHeight: 22 },
   input: {
     borderWidth: 1,
     borderColor: '#ccc',
