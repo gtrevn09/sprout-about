@@ -156,12 +156,13 @@ function DraggableShape({
       const sinA = Math.abs(Math.sin(rot));
       const aabbW = cosA * myW + sinA * myH;
       const aabbH = sinA * myW + cosA * myH;
-      const canvasPxW = canvasWFt * scale;
-      const canvasPxH = canvasHFt * scale;
-      const minX = aabbW / 2 - myW / 2;
-      const maxX = canvasPxW - myW / 2 - aabbW / 2;
-      const minY = aabbH / 2 - myH / 2;
-      const maxY = canvasPxH - myH / 2 - aabbH / 2;
+      const BORDER = 2;
+      const canvasPxW = Math.round(canvasWFt * scale);
+      const canvasPxH = Math.round(canvasHFt * scale);
+      const minX = BORDER + aabbW / 2 - myW / 2;
+      const maxX = canvasPxW - BORDER - myW / 2 - aabbW / 2;
+      const minY = BORDER + aabbH / 2 - myH / 2;
+      const maxY = canvasPxH - BORDER - myH / 2 - aabbH / 2;
       const targetX = clamp(savedX.value + e.translationX, minX, maxX);
       const targetY = clamp(savedY.value + e.translationY, minY, maxY);
 
@@ -187,12 +188,13 @@ function DraggableShape({
       const myH = shape.height_ft * scale;
       const aabbW = cosA * myW + sinA * myH;
       const aabbH = sinA * myW + cosA * myH;
-      const canvasPxW = canvasWFt * scale;
-      const canvasPxH = canvasHFt * scale;
-      const minX = aabbW / 2 - myW / 2;
-      const maxX = canvasPxW - myW / 2 - aabbW / 2;
-      const minY = aabbH / 2 - myH / 2;
-      const maxY = canvasPxH - myH / 2 - aabbH / 2;
+      const BORDER = 2;
+      const canvasPxW = Math.round(canvasWFt * scale);
+      const canvasPxH = Math.round(canvasHFt * scale);
+      const minX = BORDER + aabbW / 2 - myW / 2;
+      const maxX = canvasPxW - BORDER - myW / 2 - aabbW / 2;
+      const minY = BORDER + aabbH / 2 - myH / 2;
+      const maxY = canvasPxH - BORDER - myH / 2 - aabbH / 2;
       let nx = posX.value;
       let ny = posY.value;
       if (nx - minX < SNAP) nx = minX;
@@ -490,6 +492,22 @@ function LayoutCard({
     const w = Math.max(0.5, parseFloat(editW) || editShape.width_ft);
     const h = editShape.shape_type === 'circle' ? w : Math.max(0.5, parseFloat(editH) || editShape.height_ft);
     updateLayoutShape(editShape.id, editLabel.trim() || null, w, h, editColor, editBedId);
+
+    // Re-clamp position in case the shape grew larger and now overflows the canvas
+    const rot = editShape.rotation;
+    const cosA = Math.abs(Math.cos(rot)), sinA = Math.abs(Math.sin(rot));
+    const aabbW = cosA * w + sinA * h;
+    const aabbH = sinA * w + cosA * h;
+    const minX = aabbW / 2 - w / 2;
+    const maxX = Math.max(minX, canvasW - w / 2 - aabbW / 2);
+    const minY = aabbH / 2 - h / 2;
+    const maxY = Math.max(minY, canvasH - h / 2 - aabbH / 2);
+    const nx = clamp(editShape.x, minX, maxX);
+    const ny = clamp(editShape.y, minY, maxY);
+    if (nx !== editShape.x || ny !== editShape.y) {
+      updateShapeTransform(editShape.id, nx, ny, rot);
+    }
+
     setShapes(getLayoutShapes(layout.id));
     setEditShape(null);
   }

@@ -46,6 +46,12 @@ export async function scheduleTreatmentReminder(
   return id;
 }
 
+export async function cancelNotification(id: string): Promise<void> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(id);
+  } catch {}
+}
+
 export async function scheduleFertilizerReminder(
   plantName: string,
   plantId: number,
