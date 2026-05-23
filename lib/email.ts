@@ -1,4 +1,4 @@
-const RESET_EMAIL_URL = 'https://sprout-about.vercel.app/api/send-reset-email';
+const RESET_EMAIL_URL = 'https://sprout-about-api.vercel.app/api/send-reset-email';
 
 export async function sendPasswordResetEmail(
   toEmail: string,
